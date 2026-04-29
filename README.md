@@ -16,6 +16,7 @@
 - 每个账号有独立 `account_id`，例如 `1`、`2`、`3`、`4`；
 - 日志会标出账号来源，例如 `[Feishu:1] Connected in websocket mode`；
 - gateway routing/session key 带账号 namespace，避免不同机器人收发串线；
+- 忙碌提示、重启提示等非最终回复也保留账号 metadata，避免多账号 gateway 误用默认账号回消息；
 - 启动采用 fail-closed 语义：配置了多个账号时，任一账号没连上，整个 Feishu multi-account 启动会失败，而不是假装部分成功。
 
 ### 2. 修复 Python Lark SDK 多 websocket 共享全局状态的问题

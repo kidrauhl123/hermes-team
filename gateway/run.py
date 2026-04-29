@@ -1815,7 +1815,9 @@ class GatewayRunner:
             if not adapter:
                 return True
 
-            thread_meta = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+            thread_meta = adapter._metadata_for_source(event.source) if hasattr(adapter, "_metadata_for_source") else (
+                {"thread_id": event.source.thread_id} if event.source.thread_id else None
+            )
             if self._queue_during_drain_enabled():
                 self._queue_or_replace_pending_event(session_key, event)
                 message = f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
@@ -1954,7 +1956,9 @@ class GatewayRunner:
         except Exception as _onb_err:
             logger.debug("Failed to apply busy-input onboarding hint: %s", _onb_err)
 
-        thread_meta = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+        thread_meta = adapter._metadata_for_source(event.source) if hasattr(adapter, "_metadata_for_source") else (
+            {"thread_id": event.source.thread_id} if event.source.thread_id else None
+        )
         try:
             await adapter._send_with_retry(
                 chat_id=event.source.chat_id,
