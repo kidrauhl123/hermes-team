@@ -1,6 +1,6 @@
 # Hermes Team
 
-这是基于 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) 的个人 fork，重点是把 Hermes 改造成更适合多机器人长期运行的版本。
+这是基于 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) 的个人 fork，重点是把 Hermes 改造成更适合**多机器人长期运行**的版本。
 
 > 原版 Hermes Agent 的完整 README、安装方式和官方文档请看：
 > - 官方仓库：[NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
@@ -8,7 +8,7 @@
 
 ## 和原版 Hermes 主要不一样的地方
 
-### 1. 单个 Feishu gateway 支持多个飞书机器人账号
+### 1. 单个 Feishu gateway 支持多个机器人账号
 
 原版 Hermes 通常是“一个 Feishu/Lark 机器人 = 一个 Hermes profile = 一个 gateway 进程”。这个 fork 增加了单进程多 Feishu account 的实验性支持：
 
@@ -65,40 +65,42 @@ $HERMES_HOME/memories/MEMORY.md
 - 用户偏好、项目事实、工具经验 → 仍写入 shared `USER.md` / `MEMORY.md`；
 - 第一版不做 per-account memory，只隔离 persona/soul。
 
-### 5. 当前本机验证过的运行形态
+### 5. 推荐部署形态
 
-本机目前采用两个常驻 gateway：
+这个 fork 适合把一组相关机器人放进同一个 profile / gateway，例如：
 
 ```text
-default / 九妹
-  HERMES_HOME=/Users/zuiyou/.hermes
+main / 默认个人入口
+  HERMES_HOME=$HOME/.hermes
   LaunchAgent=ai.hermes.gateway
 
-TeamA / 多飞书机器人统一 gateway
-  HERMES_HOME=/Users/zuiyou/.hermes/profiles/TeamA
+TeamA / 多机器人统一 gateway
+  HERMES_HOME=$HOME/.hermes/profiles/TeamA
   LaunchAgent=ai.hermes.gateway.TeamA
 ```
 
-`TeamA` profile 内当前内部账号编号：
+`TeamA` profile 内可以用简单内部编号管理账号，例如：
 
 ```text
-1 = 二妹
-2 = 三妹
-3 = 丞相
-4 = 赵高
+1 = assistant-a
+2 = assistant-b
+3 = assistant-c
+4 = assistant-d
 ```
 
-这些编号只用于配置、路由和 `souls/<account_id>.md` 文件命名，不能写进机器人自我认知里。机器人面向用户时只需要知道自己是谁，例如“我是二妹”，不应说“我是编号 1”或“我是飞书机器人”。
+这些编号只用于配置、路由和 `souls/<account_id>.md` 文件命名，不能写进机器人自我认知里。机器人面向用户时只需要知道自己的用户可见身份，例如“我是 assistant-a”，不应说“我是编号 1”或“我是飞书机器人”。
 
-后续如果迁移九妹进统一 Feishu gateway，推荐内部编号调整为：
+如果后续要把默认入口也迁入统一 gateway，可以重新规划内部编号，例如：
 
 ```text
-1 = 九妹
-2 = 二妹
-3 = 三妹
-4 = 丞相
-5 = 赵高
+1 = primary-assistant
+2 = assistant-a
+3 = assistant-b
+4 = assistant-c
+5 = assistant-d
 ```
+
+以上只是匿名示例；实际部署时请按自己的机器人名称、profile 名称和路径调整，并避免把真实昵称、私有路径、凭证或运行数据写进公开 README。
 
 ## 当前状态
 
