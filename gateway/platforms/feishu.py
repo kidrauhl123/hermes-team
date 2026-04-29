@@ -4255,7 +4255,7 @@ class FeishuAdapter(BasePlatformAdapter):
         )
         await self._wait_for_websocket_ready()
 
-    async def _wait_for_websocket_ready(self, timeout_seconds: float = 10.0) -> None:
+    async def _wait_for_websocket_ready(self, timeout_seconds: float = None) -> None:
         """Wait until the official Lark websocket client has a live connection.
 
         ``lark_oapi.ws.Client.start`` runs in a thread and otherwise reports
@@ -4263,6 +4263,11 @@ class FeishuAdapter(BasePlatformAdapter):
         Feishu account connected while the official websocket thread has already
         exited or never produced a socket.
         """
+        if timeout_seconds is None:
+            try:
+                timeout_seconds = float(os.getenv("FEISHU_WS_READY_TIMEOUT", "30"))
+            except (TypeError, ValueError):
+                timeout_seconds = 30.0
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             ws_future = self._ws_future
