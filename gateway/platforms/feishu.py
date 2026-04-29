@@ -64,7 +64,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -130,6 +130,7 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     BasePlatformAdapter,
     MessageEvent,
+    MessageHandler,
     MessageType,
     ProcessingOutcome,
     SendResult,
@@ -1238,16 +1239,100 @@ def _strip_edge_self_mentions(
             return remaining
 
 
+class _ThreadLocalLarkLoopProxy:
+    """Thread-local facade for lark_oapi.ws.client's module-global loop.
+
+    lark-oapi 1.5.x stores a single module-global ``loop`` and all Client
+    instances call ``loop.run_until_complete`` / ``loop.create_task``.  A single
+    Hermes process can host multiple Feishu websocket clients, so assigning a
+    concrete event loop to that global from each client thread is racy.  This
+    proxy keeps the SDK API shape while resolving the loop per websocket thread.
+    """
+
+    def __init__(self) -> None:
+        self._local = threading.local()
+
+    def set(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._local.loop = loop
+
+    def clear(self) -> None:
+        if hasattr(self._local, "loop"):
+            del self._local.loop
+
+    def get(self) -> asyncio.AbstractEventLoop:
+        loop = getattr(self._local, "loop", None)
+        if loop is None:
+            raise RuntimeError("No Lark websocket event loop bound to this thread")
+        return loop
+
+    def run_until_complete(self, *args: Any, **kwargs: Any) -> Any:
+        return self.get().run_until_complete(*args, **kwargs)
+
+    def create_task(self, *args: Any, **kwargs: Any) -> asyncio.Task:
+        return self.get().create_task(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.get(), name)
+
+
+class _ThreadLocalWebsocketsConnectProxy:
+    """Thread-local facade for lark_oapi.ws.client.websockets.connect.
+
+    The SDK imports the ``websockets`` module once.  Temporarily monkeypatching
+    ``websockets.connect`` per Feishu account is unsafe because websocket
+    clients run concurrently.  This permanent proxy applies per-thread ping
+    overrides without replacing/restoring a global function for each account.
+    """
+
+    def __init__(self, original_connect: Any) -> None:
+        self._original_connect = original_connect
+        self._local = threading.local()
+
+    def set_adapter(self, adapter: Any) -> None:
+        self._local.adapter = adapter
+
+    def clear_adapter(self) -> None:
+        if hasattr(self._local, "adapter"):
+            del self._local.adapter
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        adapter = getattr(self._local, "adapter", None)
+        if adapter is not None:
+            if adapter._ws_ping_interval is not None and "ping_interval" not in kwargs:
+                kwargs["ping_interval"] = adapter._ws_ping_interval
+            if adapter._ws_ping_timeout is not None and "ping_timeout" not in kwargs:
+                kwargs["ping_timeout"] = adapter._ws_ping_timeout
+        return await self._original_connect(*args, **kwargs)
+
+
+def _ensure_lark_ws_threadlocal_runtime(ws_client_module: Any) -> tuple[_ThreadLocalLarkLoopProxy, _ThreadLocalWebsocketsConnectProxy]:
+    loop_proxy = getattr(ws_client_module, "_hermes_threadlocal_loop_proxy", None)
+    if not isinstance(loop_proxy, _ThreadLocalLarkLoopProxy):
+        loop_proxy = _ThreadLocalLarkLoopProxy()
+        setattr(ws_client_module, "_hermes_threadlocal_loop_proxy", loop_proxy)
+        ws_client_module.loop = loop_proxy
+
+    connect_proxy = getattr(ws_client_module, "_hermes_threadlocal_connect_proxy", None)
+    if not isinstance(connect_proxy, _ThreadLocalWebsocketsConnectProxy):
+        original_connect = ws_client_module.websockets.connect
+        connect_proxy = _ThreadLocalWebsocketsConnectProxy(original_connect)
+        setattr(ws_client_module, "_hermes_threadlocal_connect_proxy", connect_proxy)
+        ws_client_module.websockets.connect = connect_proxy
+
+    return loop_proxy, connect_proxy
+
+
 def _run_official_feishu_ws_client(ws_client: Any, adapter: Any) -> None:
     """Run the official Lark WS client in its own thread-local event loop."""
     import lark_oapi.ws.client as ws_client_module
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    ws_client_module.loop = loop
+    loop_proxy, connect_proxy = _ensure_lark_ws_threadlocal_runtime(ws_client_module)
+    loop_proxy.set(loop)
+    connect_proxy.set_adapter(adapter)
     adapter._ws_thread_loop = loop
 
-    original_connect = ws_client_module.websockets.connect
     original_configure = getattr(ws_client, "_configure", None)
 
     def _apply_runtime_ws_overrides() -> None:
@@ -1259,13 +1344,6 @@ def _run_official_feishu_ws_client(ws_client: Any, adapter: Any) -> None:
         except Exception:
             logger.debug("[Feishu] Failed to apply websocket runtime overrides", exc_info=True)
 
-    async def _connect_with_overrides(*args: Any, **kwargs: Any) -> Any:
-        if adapter._ws_ping_interval is not None and "ping_interval" not in kwargs:
-            kwargs["ping_interval"] = adapter._ws_ping_interval
-        if adapter._ws_ping_timeout is not None and "ping_timeout" not in kwargs:
-            kwargs["ping_timeout"] = adapter._ws_ping_timeout
-        return await original_connect(*args, **kwargs)
-
     def _configure_with_overrides(conf: Any) -> Any:
         if original_configure is None:
             raise RuntimeError("Feishu _configure_with_overrides called but original_configure is None")
@@ -1273,16 +1351,18 @@ def _run_official_feishu_ws_client(ws_client: Any, adapter: Any) -> None:
         _apply_runtime_ws_overrides()
         return result
 
-    ws_client_module.websockets.connect = _connect_with_overrides
     if original_configure is not None:
         setattr(ws_client, "_configure", _configure_with_overrides)
     _apply_runtime_ws_overrides()
     try:
         ws_client.start()
     except Exception:
-        pass
+        logger.exception(
+            "[Feishu:%s] official websocket client exited",
+            getattr(adapter, "account_id", "default"),
+        )
+        raise
     finally:
-        ws_client_module.websockets.connect = original_connect
         if original_configure is not None:
             setattr(ws_client, "_configure", original_configure)
         pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
@@ -1298,7 +1378,152 @@ def _run_official_feishu_ws_client(ws_client: Any, adapter: Any) -> None:
             loop.close()
         except Exception:
             pass
+        connect_proxy.clear_adapter()
+        loop_proxy.clear()
         adapter._ws_thread_loop = None
+
+
+
+class MultiFeishuAdapter(BasePlatformAdapter):
+    """Composite Feishu adapter for one gateway process serving multiple Feishu apps.
+
+    Config shape (under platforms.feishu.extra)::
+
+        accounts:
+          default:
+            app_id: ...
+            app_secret: ...
+            route_profile: feishu-default
+          bot2:
+            app_id: ...
+            app_secret: ...
+            route_profile: feishu-bot-2
+
+    Each child is a normal FeishuAdapter with its own websocket/client/lock.  Incoming
+    events are tagged with ``SessionSource.account_id`` and optional
+    ``route_profile`` so session keys and delivery can stay account-scoped.
+    """
+
+    def __init__(self, config: PlatformConfig):
+        super().__init__(config, Platform.FEISHU)
+        self._children: Dict[str, FeishuAdapter] = {}
+        self._default_account_id: Optional[str] = None
+        self._build_children(config)
+
+    @staticmethod
+    def _iter_account_configs(config: PlatformConfig) -> list[tuple[str, Dict[str, Any]]]:
+        raw_accounts = (config.extra or {}).get("accounts") or []
+        if isinstance(raw_accounts, dict):
+            items = [(str(account_id), value) for account_id, value in raw_accounts.items()]
+        elif isinstance(raw_accounts, list):
+            items = []
+            for index, value in enumerate(raw_accounts):
+                if not isinstance(value, dict):
+                    continue
+                account_id = str(value.get("account_id") or value.get("id") or value.get("name") or f"account{index + 1}")
+                items.append((account_id, value))
+        else:
+            items = []
+        return [(account_id.strip(), dict(value)) for account_id, value in items if account_id.strip() and isinstance(value, dict)]
+
+    def _build_children(self, config: PlatformConfig) -> None:
+        inherited_extra = dict(config.extra or {})
+        inherited_extra.pop("accounts", None)
+        for account_id, account_extra in self._iter_account_configs(config):
+            child_extra = {**inherited_extra, **account_extra, "account_id": account_id}
+            child_config = PlatformConfig(
+                enabled=config.enabled,
+                token=config.token,
+                api_key=config.api_key,
+                home_channel=config.home_channel,
+                reply_to_mode=config.reply_to_mode,
+                extra=child_extra,
+            )
+            self._children[account_id] = FeishuAdapter(child_config)
+            if self._default_account_id is None:
+                self._default_account_id = account_id
+        if not self._children:
+            raise ValueError("Feishu multi-account config requires at least one account")
+
+    @property
+    def children(self) -> Dict[str, FeishuAdapter]:
+        return self._children
+
+    def set_message_handler(self, handler: MessageHandler) -> None:
+        super().set_message_handler(handler)
+        for child in self._children.values():
+            child.set_message_handler(handler)
+
+    def set_busy_session_handler(self, handler: Optional[Callable[[MessageEvent, str], Awaitable[bool]]]) -> None:
+        super().set_busy_session_handler(handler)
+        for child in self._children.values():
+            child.set_busy_session_handler(handler)
+
+    def set_session_store(self, session_store: Any) -> None:
+        super().set_session_store(session_store)
+        for child in self._children.values():
+            child.set_session_store(session_store)
+
+    async def connect(self) -> bool:
+        connected_children: list[FeishuAdapter] = []
+        failed_accounts: list[str] = []
+        for account_id, child in self._children.items():
+            try:
+                if await child.connect():
+                    connected_children.append(child)
+                else:
+                    failed_accounts.append(account_id)
+                    logger.error("[Feishu:%s] account failed to connect", account_id)
+            except Exception:
+                failed_accounts.append(account_id)
+                logger.exception("[Feishu:%s] account failed to connect", account_id)
+        if not failed_accounts and len(connected_children) == len(self._children):
+            self._running = True
+            return True
+
+        for child in connected_children:
+            try:
+                await child.disconnect()
+            except Exception:
+                logger.debug("[Feishu] child disconnect after partial connect failure failed", exc_info=True)
+        self._running = False
+        message = (
+            "Feishu multi-account startup requires every configured account to connect; "
+            f"failed account(s): {', '.join(failed_accounts) or 'unknown'}"
+        )
+        self._set_fatal_error("feishu_multi_connect_error", message, retryable=True)
+        logger.error("[Feishu] %s", message)
+        return False
+
+    async def disconnect(self) -> None:
+        self._running = False
+        for child in self._children.values():
+            try:
+                await child.disconnect()
+            except Exception:
+                logger.debug("[Feishu] child disconnect failed", exc_info=True)
+
+    def _child_for_metadata(self, metadata: Optional[Dict[str, Any]]) -> FeishuAdapter:
+        account_id = str((metadata or {}).get("account_id") or self._default_account_id or "")
+        child = self._children.get(account_id)
+        if child is None:
+            raise ValueError(f"Unknown Feishu account_id for delivery: {account_id}")
+        return child
+
+    async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        return await self._child_for_metadata(metadata).send(chat_id, content, reply_to=reply_to, metadata=metadata)
+
+    async def send_typing(self, chat_id: str, metadata=None) -> None:
+        return await self._child_for_metadata(metadata).send_typing(chat_id, metadata=metadata)
+
+    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False) -> SendResult:
+        return await self._child_for_metadata(None).edit_message(chat_id, message_id, content, finalize=finalize)
+
+    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+        return await self._child_for_metadata(None).delete_message(chat_id, message_id)
+
+    async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
+        return await self._child_for_metadata(None).get_chat_info(chat_id)
 
 
 def check_feishu_requirements() -> bool:
@@ -1353,6 +1578,9 @@ class FeishuAdapter(BasePlatformAdapter):
         self._chat_info_cache: Dict[str, Dict[str, Any]] = {}
         self._message_text_cache: Dict[str, Optional[str]] = {}
         self._app_lock_identity: Optional[str] = None
+        extra = config.extra or {}
+        self.account_id = str(extra.get("account_id") or extra.get("id") or "default").strip() or "default"
+        self.route_profile = str(extra.get("route_profile") or extra.get("profile") or "").strip() or None
         self._text_batch_state = FeishuBatchState()
         self._pending_text_batches = self._text_batch_state.events
         self._pending_text_batch_tasks = self._text_batch_state.tasks
@@ -1541,7 +1769,12 @@ class FeishuAdapter(BasePlatformAdapter):
             self._loop = asyncio.get_running_loop()
             await self._connect_with_retry()
             self._mark_connected()
-            logger.info("[Feishu] Connected in %s mode (%s)", self._connection_mode, self._domain_name)
+            logger.info(
+                "[Feishu:%s] Connected in %s mode (%s)",
+                self.account_id,
+                self._connection_mode,
+                self._domain_name,
+            )
             return True
         except Exception as exc:
             await self._release_app_lock()
@@ -2417,6 +2650,8 @@ class FeishuAdapter(BasePlatformAdapter):
             user_name=sender_profile["user_name"],
             thread_id=None,
             user_id_alt=sender_profile["user_id_alt"],
+            account_id=getattr(self, "account_id", "default"),
+            route_profile=getattr(self, "route_profile", None),
         )
         synthetic_event = MessageEvent(
             text=synthetic_text,
@@ -2479,6 +2714,8 @@ class FeishuAdapter(BasePlatformAdapter):
             user_name=sender_profile["user_name"],
             thread_id=None,
             user_id_alt=sender_profile["user_id_alt"],
+            account_id=getattr(self, "account_id", "default"),
+            route_profile=getattr(self, "route_profile", None),
         )
         synthetic_event = MessageEvent(
             text=synthetic_text,
@@ -2725,6 +2962,8 @@ class FeishuAdapter(BasePlatformAdapter):
             user_name=sender_profile["user_name"],
             thread_id=getattr(message, "thread_id", None) or None,
             user_id_alt=sender_profile["user_id_alt"],
+            account_id=getattr(self, "account_id", "default"),
+            route_profile=getattr(self, "route_profile", None),
         )
         normalized = MessageEvent(
             text=text,
@@ -4013,6 +4252,37 @@ class FeishuAdapter(BasePlatformAdapter):
             _run_official_feishu_ws_client,
             self._ws_client,
             self,
+        )
+        await self._wait_for_websocket_ready()
+
+    async def _wait_for_websocket_ready(self, timeout_seconds: float = None) -> None:
+        """Wait until the official Lark websocket client has a live connection.
+
+        ``lark_oapi.ws.Client.start`` runs in a thread and otherwise reports
+        failures only through logs.  Without this barrier Hermes can mark a
+        Feishu account connected while the official websocket thread has already
+        exited or never produced a socket.
+        """
+        if timeout_seconds is None:
+            try:
+                timeout_seconds = float(os.getenv("FEISHU_WS_READY_TIMEOUT", "30"))
+            except (TypeError, ValueError):
+                timeout_seconds = 30.0
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            ws_future = self._ws_future
+            if ws_future is not None and ws_future.done():
+                await ws_future
+                # Some unit-test doubles do not model the SDK's private _conn
+                # attribute.  Treat a cleanly completed fake future as ready
+                # only for those doubles; real lark clients expose _conn.
+                if self._ws_client is not None and not hasattr(self._ws_client, "_conn"):
+                    return
+            if getattr(self._ws_client, "_conn", None) is not None:
+                return
+            await asyncio.sleep(0.1)
+        raise RuntimeError(
+            f"Feishu websocket for account {self.account_id!r} did not become ready within {timeout_seconds:.1f}s"
         )
 
     async def _connect_webhook(self) -> None:

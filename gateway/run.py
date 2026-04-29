@@ -3255,10 +3255,12 @@ class GatewayRunner:
             return DingTalkAdapter(config)
 
         elif platform == Platform.FEISHU:
-            from gateway.platforms.feishu import FeishuAdapter, check_feishu_requirements
+            from gateway.platforms.feishu import FeishuAdapter, MultiFeishuAdapter, check_feishu_requirements
             if not check_feishu_requirements():
                 logger.warning("Feishu: lark-oapi not installed or FEISHU_APP_ID/SECRET not set")
                 return None
+            if isinstance(getattr(config, "extra", None), dict) and config.extra.get("accounts"):
+                return MultiFeishuAdapter(config)
             return FeishuAdapter(config)
 
         elif platform == Platform.WECOM_CALLBACK:
@@ -7165,6 +7167,7 @@ class GatewayRunner:
                     chat_name=source.chat_name,
                     chat_type=source.chat_type,
                     thread_id=source.thread_id,
+                    account_id=getattr(source, "account_id", None),
                     session_db=self._session_db,
                     fallback_model=self._fallback_model,
                 )
@@ -10627,6 +10630,7 @@ class GatewayRunner:
                     chat_name=source.chat_name,
                     chat_type=source.chat_type,
                     thread_id=source.thread_id,
+                    account_id=getattr(source, "account_id", None),
                     gateway_session_key=session_key,
                     session_db=self._session_db,
                     fallback_model=self._fallback_model,

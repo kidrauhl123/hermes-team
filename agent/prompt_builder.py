@@ -967,32 +967,72 @@ def _truncate_content(content: str, filename: str, max_chars: int = CONTEXT_FILE
     return head + marker + tail
 
 
-def load_soul_md() -> Optional[str]:
-    """Load SOUL.md from HERMES_HOME and return its content, or None.
+def _read_soul_file(path: Path, display_name: str) -> Optional[str]:
+    if not path.exists():
+        return None
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+        if not content:
+            return None
+        content = _scan_context_content(content, display_name)
+        content = _truncate_content(content, display_name)
+        return content
+    except Exception as e:
+        logger.debug("Could not read %s from %s: %s", display_name, path, e)
+        return None
 
-    Used as the agent identity (slot #1 in the system prompt).  When this
+
+def _safe_account_soul_name(account_id: Optional[str]) -> Optional[str]:
+    if not account_id:
+        return None
+    name = str(account_id).strip()
+    if not name or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        logger.warning("Ignoring unsafe account_id for soul lookup: %r", account_id)
+        return None
+    return name
+
+
+def load_soul_md(account_id: Optional[str] = None) -> Optional[str]:
+    """Load global base soul plus optional per-account soul from HERMES_HOME.
+
+    ``SOUL_base.md`` is the preferred global Hermes identity/style baseline.
+    ``SOUL.md`` remains supported as a backwards-compatible fallback for
+    existing Hermes homes and upstream conventions. When ``account_id`` is
+    provided and ``souls/<account_id>.md`` exists, that file is appended as the
+    current bot/account identity overlay. This keeps shared Hermes style in one
+    place while isolating per-bot persona details.
+
+    Used as the agent identity (slot #1 in the system prompt). When this
     returns content, ``build_context_files_prompt`` should be called with
-    ``skip_soul=True`` so SOUL.md isn't injected twice.
+    ``skip_soul=True`` so the base soul isn't injected twice.
     """
     try:
         from hermes_cli.config import ensure_hermes_home
         ensure_hermes_home()
     except Exception as e:
-        logger.debug("Could not ensure HERMES_HOME before loading SOUL.md: %s", e)
+        logger.debug("Could not ensure HERMES_HOME before loading base soul: %s", e)
 
-    soul_path = get_hermes_home() / "SOUL.md"
-    if not soul_path.exists():
+    hermes_home = get_hermes_home()
+    sections = []
+
+    base_path = hermes_home / "SOUL_base.md"
+    if base_path.exists():
+        base_content = _read_soul_file(base_path, "SOUL_base.md")
+    else:
+        base_content = _read_soul_file(hermes_home / "SOUL.md", "SOUL.md")
+    if base_content:
+        sections.append(base_content)
+
+    safe_account = _safe_account_soul_name(account_id)
+    if safe_account:
+        account_display = f"souls/{safe_account}.md"
+        account_content = _read_soul_file(hermes_home / "souls" / f"{safe_account}.md", account_display)
+        if account_content:
+            sections.append(account_content)
+
+    if not sections:
         return None
-    try:
-        content = soul_path.read_text(encoding="utf-8").strip()
-        if not content:
-            return None
-        content = _scan_context_content(content, "SOUL.md")
-        content = _truncate_content(content, "SOUL.md")
-        return content
-    except Exception as e:
-        logger.debug("Could not read SOUL.md from %s: %s", soul_path, e)
-        return None
+    return "\n\n".join(sections)
 
 
 def _load_hermes_md(cwd_path: Path) -> str:

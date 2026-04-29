@@ -56,6 +56,20 @@ def get_memory_dir() -> Path:
     """Return the profile-scoped memories directory."""
     return get_hermes_home() / "memories"
 
+
+def get_souls_dir() -> Path:
+    """Return the profile-scoped per-account souls directory."""
+    return get_hermes_home() / "souls"
+
+
+def _safe_account_soul_name(account_id: Optional[str]) -> Optional[str]:
+    if not account_id:
+        return None
+    name = str(account_id).strip()
+    if not name or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        return None
+    return name
+
 ENTRY_DELIMITER = "\n§\n"
 
 
@@ -468,6 +482,7 @@ def memory_tool(
     content: str = None,
     old_text: str = None,
     store: Optional[MemoryStore] = None,
+    account_id: str = None,
 ) -> str:
     """
     Single entry point for the memory tool. Dispatches to MemoryStore methods.
@@ -477,8 +492,56 @@ def memory_tool(
     if store is None:
         return tool_error("Memory is not available. It may be disabled in config or this environment.", success=False)
 
-    if target not in ("memory", "user"):
-        return tool_error(f"Invalid target '{target}'. Use 'memory' or 'user'.", success=False)
+    if target not in ("memory", "user", "soul"):
+        return tool_error(f"Invalid target '{target}'. Use 'memory', 'user', or 'soul'.", success=False)
+
+    if target == "soul":
+        safe_account = _safe_account_soul_name(account_id)
+        if not safe_account:
+            return tool_error("target='soul' requires a safe current account_id.", success=False)
+        soul_path = get_souls_dir() / f"{safe_account}.md"
+        get_souls_dir().mkdir(parents=True, exist_ok=True)
+        with MemoryStore._file_lock(soul_path):
+            entries = MemoryStore._read_file(soul_path)
+            entries = list(dict.fromkeys(entries))
+            if action == "add":
+                if not content:
+                    return tool_error("Content is required for 'add' action.", success=False)
+                content = content.strip()
+                scan_error = _scan_memory_content(content)
+                if scan_error:
+                    return tool_error(scan_error, success=False)
+                if content not in entries:
+                    entries.append(content)
+                MemoryStore._write_file(soul_path, entries)
+                result = {"success": True, "target": "soul", "account_id": safe_account, "entries": entries, "entry_count": len(entries)}
+            elif action == "replace":
+                if not old_text:
+                    return tool_error("old_text is required for 'replace' action.", success=False)
+                if not content:
+                    return tool_error("content is required for 'replace' action.", success=False)
+                matches = [i for i, e in enumerate(entries) if old_text in e]
+                if len(matches) != 1:
+                    return tool_error(f"Expected exactly one matching soul entry, found {len(matches)}.", success=False)
+                scan_error = _scan_memory_content(content)
+                if scan_error:
+                    return tool_error(scan_error, success=False)
+                entries[matches[0]] = content.strip()
+                entries = list(dict.fromkeys(entries))
+                MemoryStore._write_file(soul_path, entries)
+                result = {"success": True, "target": "soul", "account_id": safe_account, "entries": entries, "entry_count": len(entries)}
+            elif action == "remove":
+                if not old_text:
+                    return tool_error("old_text is required for 'remove' action.", success=False)
+                matches = [i for i, e in enumerate(entries) if old_text in e]
+                if len(matches) != 1:
+                    return tool_error(f"Expected exactly one matching soul entry, found {len(matches)}.", success=False)
+                entries.pop(matches[0])
+                MemoryStore._write_file(soul_path, entries)
+                result = {"success": True, "target": "soul", "account_id": safe_account, "entries": entries, "entry_count": len(entries)}
+            else:
+                return tool_error(f"Unknown action '{action}'. Use: add, replace, remove", success=False)
+        return json.dumps(result, ensure_ascii=False)
 
     if action == "add":
         if not content:
@@ -530,9 +593,10 @@ MEMORY_SCHEMA = {
         "state to memory; use session_search to recall those from past transcripts.\n"
         "If you've discovered a new way to do something, solved a problem that could be "
         "necessary later, save it as a skill with the skill tool.\n\n"
-        "TWO TARGETS:\n"
+        "TARGETS:\n"
         "- 'user': who the user is -- name, role, preferences, communication style, pet peeves\n"
-        "- 'memory': your notes -- environment facts, project conventions, tool quirks, lessons learned\n\n"
+        "- 'memory': your notes -- environment facts, project conventions, tool quirks, lessons learned\n"
+        "- 'soul': current bot's private persona/style/identity/salutation; only available in account-scoped gateways\n\n"
         "ACTIONS: add (new entry), replace (update existing -- old_text identifies it), "
         "remove (delete -- old_text identifies it).\n\n"
         "SKIP: trivial/obvious info, things easily re-discovered, raw data dumps, and temporary task state."
@@ -547,8 +611,8 @@ MEMORY_SCHEMA = {
             },
             "target": {
                 "type": "string",
-                "enum": ["memory", "user"],
-                "description": "Which memory store: 'memory' for personal notes, 'user' for user profile."
+                "enum": ["memory", "user", "soul"],
+                "description": "Which store: 'memory' for shared notes, 'user' for shared user profile, 'soul' for current bot private persona/style."
             },
             "content": {
                 "type": "string",

@@ -311,7 +311,7 @@ class GatewayConfig:
             elif platform == Platform.WEBHOOK:
                 connected.append(platform)
             # Feishu uses extra dict for app credentials
-            elif platform == Platform.FEISHU and config.extra.get("app_id"):
+            elif platform == Platform.FEISHU and (config.extra.get("app_id") or config.extra.get("accounts")):
                 connected.append(platform)
             # WeCom bot mode uses extra dict for bot credentials
             elif platform == Platform.WECOM and config.extra.get("bot_id"):

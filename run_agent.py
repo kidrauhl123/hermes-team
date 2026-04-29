@@ -923,6 +923,7 @@ class AIAgent:
         chat_name: str = None,
         chat_type: str = None,
         thread_id: str = None,
+        account_id: str = None,
         gateway_session_key: str = None,
         skip_context_files: bool = False,
         skip_memory: bool = False,
@@ -996,6 +997,7 @@ class AIAgent:
         self._chat_name = chat_name
         self._chat_type = chat_type
         self._thread_id = thread_id
+        self._account_id = account_id
         self._gateway_session_key = gateway_session_key  # Stable per-chat key (e.g. agent:main:telegram:dm:123)
         # Pluggable print function — CLI replaces this with _cprint so that
         # raw ANSI status lines are routed through prompt_toolkit's renderer
@@ -4720,7 +4722,7 @@ class AIAgent:
         # Try SOUL.md as primary identity (unless context files are skipped)
         _soul_loaded = False
         if not self.skip_context_files:
-            _soul_content = load_soul_md()
+            _soul_content = load_soul_md(account_id=self._account_id)
             if _soul_content:
                 prompt_parts = [_soul_content]
                 _soul_loaded = True
@@ -9042,6 +9044,7 @@ class AIAgent:
                 content=function_args.get("content"),
                 old_text=function_args.get("old_text"),
                 store=self._memory_store,
+                account_id=self._account_id,
             )
             # Bridge: notify external memory provider of built-in memory writes
             if self._memory_manager and function_args.get("action") in ("add", "replace"):
@@ -9584,6 +9587,7 @@ class AIAgent:
                     content=function_args.get("content"),
                     old_text=function_args.get("old_text"),
                     store=self._memory_store,
+                    account_id=self._account_id,
                 )
                 # Bridge: notify external memory provider of built-in memory writes
                 if self._memory_manager and function_args.get("action") in ("add", "replace"):

@@ -2160,6 +2160,17 @@ class BasePlatformAdapter(ABC):
             return
         self._start_session_processing(pending_event, session_key)
 
+
+    @staticmethod
+    def _metadata_for_source(source: SessionSource) -> Optional[Dict[str, Any]]:
+        """Build platform metadata from a source, including multi-account routing."""
+        metadata: Dict[str, Any] = {}
+        if getattr(source, "thread_id", None):
+            metadata["thread_id"] = source.thread_id
+        if getattr(source, "account_id", None):
+            metadata["account_id"] = source.account_id
+        return metadata or None
+
     async def _dispatch_active_session_command(
         self,
         event: MessageEvent,
@@ -2188,7 +2199,7 @@ class BasePlatformAdapter(ABC):
         current_guard = self._active_sessions.get(session_key)
         command_guard = asyncio.Event()
         self._active_sessions[session_key] = command_guard
-        thread_meta = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+        thread_meta = self._metadata_for_source(event.source)
 
         try:
             response = await self._message_handler(event)
@@ -2283,7 +2294,7 @@ class BasePlatformAdapter(ABC):
                     self.name, cmd, session_key,
                 )
                 try:
-                    _thread_meta = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+                    _thread_meta = self._metadata_for_source(event.source)
                     response = await self._message_handler(event)
                     if response:
                         await self._send_with_retry(
@@ -2368,7 +2379,7 @@ class BasePlatformAdapter(ABC):
         callback_generation = getattr(interrupt_event, "_hermes_run_generation", None)
         
         # Start continuous typing indicator (refreshes every 2 seconds)
-        _thread_metadata = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+        _thread_metadata = self._metadata_for_source(event.source)
         _keep_typing_kwargs = {"metadata": _thread_metadata}
         try:
             _keep_typing_sig = inspect.signature(self._keep_typing)
@@ -2627,7 +2638,7 @@ class BasePlatformAdapter(ABC):
             try:
                 error_type = type(e).__name__
                 error_detail = str(e)[:300] if str(e) else "no details available"
-                _thread_metadata = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+                _thread_metadata = self._metadata_for_source(event.source)
                 await self.send(
                     chat_id=event.source.chat_id,
                     content=(
@@ -2763,6 +2774,8 @@ class BasePlatformAdapter(ABC):
         guild_id: Optional[str] = None,
         parent_chat_id: Optional[str] = None,
         message_id: Optional[str] = None,
+        account_id: Optional[str] = None,
+        route_profile: Optional[str] = None,
     ) -> SessionSource:
         """Helper to build a SessionSource for this platform."""
         # Normalize empty topic to None
@@ -2783,6 +2796,8 @@ class BasePlatformAdapter(ABC):
             guild_id=str(guild_id) if guild_id else None,
             parent_chat_id=str(parent_chat_id) if parent_chat_id else None,
             message_id=str(message_id) if message_id else None,
+            account_id=str(account_id) if account_id else None,
+            route_profile=str(route_profile) if route_profile else None,
         )
     
     @abstractmethod
