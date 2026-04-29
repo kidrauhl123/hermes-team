@@ -983,27 +983,33 @@ def _safe_account_soul_name(account_id: Optional[str]) -> Optional[str]:
 
 
 def load_soul_md(account_id: Optional[str] = None) -> Optional[str]:
-    """Load global SOUL.md plus optional per-account soul from HERMES_HOME.
+    """Load global base soul plus optional per-account soul from HERMES_HOME.
 
-    ``SOUL.md`` is the global Hermes identity/style baseline.  When
-    ``account_id`` is provided and ``souls/<account_id>.md`` exists, that file
-    is appended as the current bot/account identity overlay.  This keeps shared
-    Hermes style in one place while isolating per-bot persona details.
+    ``SOUL_base.md`` is the preferred global Hermes identity/style baseline.
+    ``SOUL.md`` remains supported as a backwards-compatible fallback for
+    existing Hermes homes and upstream conventions. When ``account_id`` is
+    provided and ``souls/<account_id>.md`` exists, that file is appended as the
+    current bot/account identity overlay. This keeps shared Hermes style in one
+    place while isolating per-bot persona details.
 
-    Used as the agent identity (slot #1 in the system prompt).  When this
+    Used as the agent identity (slot #1 in the system prompt). When this
     returns content, ``build_context_files_prompt`` should be called with
-    ``skip_soul=True`` so SOUL.md isn't injected twice.
+    ``skip_soul=True`` so the base soul isn't injected twice.
     """
     try:
         from hermes_cli.config import ensure_hermes_home
         ensure_hermes_home()
     except Exception as e:
-        logger.debug("Could not ensure HERMES_HOME before loading SOUL.md: %s", e)
+        logger.debug("Could not ensure HERMES_HOME before loading base soul: %s", e)
 
     hermes_home = get_hermes_home()
     sections = []
 
-    base_content = _read_soul_file(hermes_home / "SOUL.md", "SOUL.md")
+    base_path = hermes_home / "SOUL_base.md"
+    if base_path.exists():
+        base_content = _read_soul_file(base_path, "SOUL_base.md")
+    else:
+        base_content = _read_soul_file(hermes_home / "SOUL.md", "SOUL.md")
     if base_content:
         sections.append(base_content)
 

@@ -32,14 +32,15 @@ Python `lark_oapi.ws.client` SDK 内部存在模块级全局 event loop / websoc
 
 ### 3. 多机器人 persona / soul 分层
 
-原版 Hermes 有 `$HERMES_HOME/SOUL.md`，但同一个 gateway 内无法天然区分多个 bot 的身份。这个 fork 支持：
+原版 Hermes 有 `$HERMES_HOME/SOUL.md`，但同一个 gateway 内无法天然区分多个 bot 的身份。这个 fork 支持更清晰的分层：
 
 ```text
-$HERMES_HOME/SOUL.md
-  全局 Hermes 基底人格/总体风格
+$HERMES_HOME/SOUL_base.md
+  全局 Hermes 基底人格/总体风格；不写具体 bot 身份
+  兼容：如果没有 SOUL_base.md，会 fallback 读取旧的 SOUL.md
 
 $HERMES_HOME/souls/<account_id>.md
-  当前飞书账号/机器人的私有人设、称呼、口吻、身份
+  当前账号/机器人的私有人设、称呼、口吻、身份
 
 $HERMES_HOME/memories/USER.md
 $HERMES_HOME/memories/MEMORY.md
@@ -49,7 +50,7 @@ $HERMES_HOME/memories/MEMORY.md
 注入顺序是：
 
 ```text
-全局 SOUL.md
+全局 SOUL_base.md（fallback: SOUL.md）
 + 当前 account 的 souls/<account_id>.md
 + shared USER/MEMORY
 + 当前会话上下文
