@@ -862,6 +862,60 @@ class TestBuildSystemPrompt:
         prompt = agent._build_system_prompt()
         assert DEFAULT_AGENT_IDENTITY in prompt
 
+    def test_layers_global_soul_and_account_soul(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        (hermes_home / "SOUL.md").write_text("GLOBAL SOUL BASE", encoding="utf-8")
+        souls_dir = hermes_home / "souls"
+        souls_dir.mkdir()
+        (souls_dir / "test_a.md").write_text("TEST A PRIVATE SOUL", encoding="utf-8")
+        (souls_dir / "test_b.md").write_text("TEST B PRIVATE SOUL", encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        with (
+            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+        ):
+            agent = AIAgent(
+                api_key="test-key-1234567890",
+                base_url="https://openrouter.ai/api/v1",
+                quiet_mode=True,
+                skip_memory=True,
+                account_id="test_a",
+            )
+
+        prompt = agent._build_system_prompt()
+
+        assert "GLOBAL SOUL BASE" in prompt
+        assert "TEST A PRIVATE SOUL" in prompt
+        assert "TEST B PRIVATE SOUL" not in prompt
+        assert "GLOBAL SOUL BASE" in prompt
+
+    def test_account_soul_falls_back_to_global_soul_when_missing(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        (hermes_home / "SOUL.md").write_text("GLOBAL ONLY SOUL", encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        with (
+            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+        ):
+            agent = AIAgent(
+                api_key="test-key-1234567890",
+                base_url="https://openrouter.ai/api/v1",
+                quiet_mode=True,
+                skip_memory=True,
+                account_id="missing_bot",
+            )
+
+        prompt = agent._build_system_prompt()
+
+        assert "GLOBAL ONLY SOUL" in prompt
+        assert "missing_bot" not in prompt
+
     def test_includes_system_message(self, agent):
         prompt = agent._build_system_prompt(system_message="Custom instruction")
         assert "Custom instruction" in prompt

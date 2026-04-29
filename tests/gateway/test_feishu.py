@@ -546,7 +546,8 @@ class TestAdapterModule(unittest.TestCase):
         try:
             from gateway.platforms.feishu import _run_official_feishu_ws_client
 
-            _run_official_feishu_ws_client(fake_client, fake_adapter)
+            with self.assertRaises(RuntimeError):
+                _run_official_feishu_ws_client(fake_client, fake_adapter)
         finally:
             sys.modules.clear()
             sys.modules.update(original_modules)
