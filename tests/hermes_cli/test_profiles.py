@@ -61,12 +61,12 @@ def profile_env(tmp_path, monkeypatch):
 class TestValidateProfileName:
     """Tests for validate_profile_name()."""
 
-    @pytest.mark.parametrize("name", ["coder", "work-bot", "a1", "my_agent"])
+    @pytest.mark.parametrize("name", ["coder", "work-bot", "a1", "my_agent", "TeamA"])
     def test_valid_names_accepted(self, name):
         # Should not raise
         validate_profile_name(name)
 
-    @pytest.mark.parametrize("name", ["UPPER", "has space", ".hidden", "-leading"])
+    @pytest.mark.parametrize("name", ["has space", ".hidden", "-leading"])
     def test_invalid_names_rejected(self, name):
         with pytest.raises(ValueError):
             validate_profile_name(name)

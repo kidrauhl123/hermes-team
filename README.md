@@ -74,12 +74,12 @@ default / 九妹
   HERMES_HOME=/Users/zuiyou/.hermes
   LaunchAgent=ai.hermes.gateway
 
-feishu / 多飞书机器人统一 gateway
-  HERMES_HOME=/Users/zuiyou/.hermes/profiles/feishu
-  LaunchAgent=ai.hermes.gateway.feishu
+TeamA / 多飞书机器人统一 gateway
+  HERMES_HOME=/Users/zuiyou/.hermes/profiles/TeamA
+  LaunchAgent=ai.hermes.gateway.TeamA
 ```
 
-`feishu` profile 内当前内部账号编号：
+`TeamA` profile 内当前内部账号编号：
 
 ```text
 1 = 二妹
