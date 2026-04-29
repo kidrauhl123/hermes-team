@@ -78,7 +78,7 @@ feishu / 多飞书机器人统一 gateway
   LaunchAgent=ai.hermes.gateway.feishu
 ```
 
-`feishu` profile 内当前账号编号：
+`feishu` profile 内当前内部账号编号：
 
 ```text
 1 = 二妹
@@ -87,7 +87,9 @@ feishu / 多飞书机器人统一 gateway
 4 = 赵高
 ```
 
-后续如果迁移九妹进统一 Feishu gateway，推荐重新编号为：
+这些编号只用于配置、路由和 `souls/<account_id>.md` 文件命名，不能写进机器人自我认知里。机器人面向用户时只需要知道自己是谁，例如“我是二妹”，不应说“我是编号 1”或“我是飞书机器人”。
+
+后续如果迁移九妹进统一 Feishu gateway，推荐内部编号调整为：
 
 ```text
 1 = 九妹
