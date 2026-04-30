@@ -2,9 +2,31 @@
 
 Hermes Team 是基于 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) 的 fork，目标是让 Hermes 更适合**一组长期在线的多机器人/多 IM 账号助手**：共享长期知识和技能，同时保持每个机器人、账号、聊天的身份与会话边界清晰。
 
-> 原版 Hermes Agent 的安装、完整功能说明和官方文档请看：
+> 原版 Hermes Agent 的完整功能说明和官方文档请看：
 > - 官方仓库：[NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
 > - 官方文档：[hermes-agent.nousresearch.com/docs](https://hermes-agent.nousresearch.com/docs/)
+
+## 安装
+
+在一台新电脑上安装 Hermes Team：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kidrauhl123/hermes-team/main/scripts/install.sh | bash
+```
+
+安装后运行交互式配置：
+
+```bash
+hermes setup
+```
+
+如果只是安装源码和依赖，暂时不进入配置向导：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kidrauhl123/hermes-team/main/scripts/install.sh | bash -s -- --skip-setup
+```
+
+默认会安装到 `~/.hermes/hermes-agent`，配置、日志、会话、记忆和本机私有凭据也在 `~/.hermes/` 下。不要把 `.env`、`auth.json`、profile 配置或运行时数据库提交到公开仓库。
 
 ## 与原版 Hermes 的主要区别
 

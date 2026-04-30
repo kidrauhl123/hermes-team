@@ -6,10 +6,13 @@
 # Uses uv for desktop/server installs and Python's stdlib venv + pip on Termux.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/kidrauhl123/hermes-team/main/scripts/install.sh | bash
 #
 # Or with options:
 #   curl -fsSL ... | bash -s -- --no-venv --skip-setup
+#
+# Override the repository when testing another fork:
+#   HERMES_REPO_URL=https://github.com/OWNER/REPO.git curl -fsSL ... | bash
 #
 # ============================================================================
 
@@ -26,8 +29,13 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/hermes-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/hermes-agent.git"
+DEFAULT_REPO_URL_SSH="git@github.com:kidrauhl123/hermes-team.git"
+DEFAULT_REPO_URL_HTTPS="https://github.com/kidrauhl123/hermes-team.git"
+# Optional override for private forks or test branches. If set, it is tried first
+# and avoids accidentally cloning upstream when this installer is reused.
+REPO_URL_CUSTOM="${HERMES_REPO_URL:-}"
+REPO_URL_SSH="${HERMES_REPO_URL_SSH:-$DEFAULT_REPO_URL_SSH}"
+REPO_URL_HTTPS="${HERMES_REPO_URL_HTTPS:-$DEFAULT_REPO_URL_HTTPS}"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
@@ -855,21 +863,31 @@ clone_repo() {
             exit 1
         fi
     else
-        # Try SSH first (for private repo access), fall back to HTTPS
-        # GIT_SSH_COMMAND disables interactive prompts and sets a short timeout
-        # so SSH fails fast instead of hanging when no key is configured.
-        log_info "Trying SSH clone..."
-        if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
-           git clone --branch "$BRANCH" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
-            log_success "Cloned via SSH"
-        else
-            rm -rf "$INSTALL_DIR" 2>/dev/null  # Clean up partial SSH clone
-            log_info "SSH failed, trying HTTPS..."
-            if git clone --branch "$BRANCH" "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
-                log_success "Cloned via HTTPS"
+        if [ -n "$REPO_URL_CUSTOM" ]; then
+            log_info "Cloning custom repository: $REPO_URL_CUSTOM"
+            if git clone --branch "$BRANCH" "$REPO_URL_CUSTOM" "$INSTALL_DIR"; then
+                log_success "Cloned custom repository"
             else
-                log_error "Failed to clone repository"
+                log_error "Failed to clone custom repository"
                 exit 1
+            fi
+        else
+            # Try SSH first (for private repo access), fall back to HTTPS.
+            # GIT_SSH_COMMAND disables interactive prompts and sets a short timeout
+            # so SSH fails fast instead of hanging when no key is configured.
+            log_info "Trying SSH clone..."
+            if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
+               git clone --branch "$BRANCH" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
+                log_success "Cloned via SSH"
+            else
+                rm -rf "$INSTALL_DIR" 2>/dev/null  # Clean up partial SSH clone
+                log_info "SSH failed, trying HTTPS..."
+                if git clone --branch "$BRANCH" "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
+                    log_success "Cloned via HTTPS"
+                else
+                    log_error "Failed to clone repository"
+                    exit 1
+                fi
             fi
         fi
     fi
