@@ -43,6 +43,64 @@ class TestSessionLifecycle:
         assert session["user_id"] == "user_a"
         assert session["source"] == "feishu"
 
+    def test_create_session_backfills_null_provenance_on_existing_row(self, db):
+        """Gateway may create a session row before AIAgent sees full provenance.
+
+        Re-creating the same session_id with richer context must fill empty
+        provenance fields instead of being ignored.
+        """
+        db.create_session(session_id="sid", source="feishu", user_id="user_a")
+        db.create_session(
+            session_id="sid",
+            source="feishu",
+            user_id="user_a",
+            profile="TeamA",
+            account_id="2",
+            chat_id="chat_a",
+            thread_id="thread_a",
+            route_profile="feishu-bot-3",
+            model="test-model",
+            system_prompt="You are 三妹。",
+        )
+
+        session = db.get_session("sid")
+
+        assert session["profile"] == "TeamA"
+        assert session["account_id"] == "2"
+        assert session["chat_id"] == "chat_a"
+        assert session["thread_id"] == "thread_a"
+        assert session["route_profile"] == "feishu-bot-3"
+        assert session["model"] == "test-model"
+        assert session["system_prompt"] == "You are 三妹。"
+
+    def test_create_session_does_not_overwrite_existing_provenance(self, db):
+        db.create_session(
+            session_id="sid",
+            source="feishu",
+            user_id="user_a",
+            profile="TeamA",
+            account_id="2",
+            chat_id="chat_a",
+            route_profile="feishu-bot-3",
+        )
+        db.create_session(
+            session_id="sid",
+            source="feishu",
+            user_id="user_b",
+            profile="Other",
+            account_id="3",
+            chat_id="chat_b",
+            route_profile="feishu-bot-4",
+        )
+
+        session = db.get_session("sid")
+
+        assert session["user_id"] == "user_a"
+        assert session["profile"] == "TeamA"
+        assert session["account_id"] == "2"
+        assert session["chat_id"] == "chat_a"
+        assert session["route_profile"] == "feishu-bot-3"
+
     def test_get_nonexistent_session(self, db):
         assert db.get_session("nonexistent") is None
 

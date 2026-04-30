@@ -515,6 +515,39 @@ class TestLoadTranscriptCorruptLines:
         assert messages[1]["content"] == "b"
 
 
+class TestSessionStoreProvenance:
+    def test_get_or_create_session_writes_gateway_provenance_to_sqlite(self, tmp_path):
+        from hermes_state import SessionDB
+
+        config = GatewayConfig()
+        with patch("gateway.session.SessionStore._ensure_loaded"):
+            store = SessionStore(sessions_dir=tmp_path / "sessions", config=config)
+        store._db = SessionDB(db_path=tmp_path / "state.db")
+        store._loaded = True
+
+        source = SessionSource(
+            platform=Platform.FEISHU,
+            chat_id="chat_a",
+            chat_type="group",
+            user_id="user_a",
+            thread_id="thread_a",
+            account_id="2",
+            route_profile="feishu-bot-3",
+        )
+        with patch("hermes_cli.profiles.get_active_profile_name", return_value="TeamA"):
+            entry = store.get_or_create_session(source)
+
+        row = store._db.get_session(entry.session_id)
+
+        assert row["source"] == "feishu"
+        assert row["user_id"] == "user_a"
+        assert row["profile"] == "TeamA"
+        assert row["account_id"] == "2"
+        assert row["chat_id"] == "chat_a"
+        assert row["thread_id"] == "thread_a"
+        assert row["route_profile"] == "feishu-bot-3"
+
+
 class TestLoadTranscriptPreferLongerSource:
     """Regression: load_transcript must return whichever source (SQLite or JSONL)
     has more messages to prevent silent truncation.  GH-3212."""

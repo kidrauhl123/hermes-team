@@ -343,13 +343,24 @@ def _filters_for_scope(scope: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
     # included here because they will fail the exact chat/account predicates.
     keys = ("source", "profile", "account_id", "chat_id")
     if all(ctx.get(k) is not None for k in keys):
-        return {
+        filters = {
             "source": ctx["source"],
             "profile": ctx["profile"],
             "account_id": ctx["account_id"],
             "chat_id": ctx["chat_id"],
             "thread_id": ctx.get("thread_id"),
         }
+        # Match the gateway's default group/channel isolation boundary:
+        # when a current user is known, do not let same-chat sessions from
+        # another participant leak into default current_chat recall.
+        if ctx.get("user_id"):
+            filters["user_id"] = ctx["user_id"]
+        # route_profile is a persona/bot routing boundary when present.  DMs
+        # often have a single route per account, but including it prevents
+        # future same-account/same-chat multi-persona collisions.
+        if ctx.get("route_profile"):
+            filters["route_profile"] = ctx["route_profile"]
+        return filters
     return {"user_id": ctx["user_id"]} if ctx.get("user_id") else {}
 
 

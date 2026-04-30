@@ -399,7 +399,7 @@ class TestSessionSearch:
         result = json.loads(session_search(
             query="shared", db=mock_db, current_session_id="sid", current_source="feishu",
             current_profile="TeamA", current_account_id="2", current_chat_id="chat_a",
-            current_thread_id=None, current_user_id="user",
+            current_thread_id=None, current_route_profile="feishu-bot-3", current_user_id="user",
         ))
 
         assert result["success"] is True
@@ -409,6 +409,8 @@ class TestSessionSearch:
         assert kwargs["account_id"] == "2"
         assert kwargs["chat_id"] == "chat_a"
         assert kwargs["thread_id"] is None
+        assert kwargs["user_id"] == "user"
+        assert kwargs["route_profile"] == "feishu-bot-3"
 
     def test_scope_current_account_relaxes_chat_only(self):
         from unittest.mock import MagicMock

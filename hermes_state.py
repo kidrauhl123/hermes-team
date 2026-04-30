@@ -541,10 +541,22 @@ class SessionDB:
         """Create a new session record. Returns the session_id."""
         def _do(conn):
             conn.execute(
-                """INSERT OR IGNORE INTO sessions (id, source, user_id, profile,
+                """INSERT INTO sessions (id, source, user_id, profile,
                    account_id, chat_id, thread_id, route_profile, model, model_config,
                    system_prompt, parent_session_id, started_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       source = COALESCE(sessions.source, excluded.source),
+                       user_id = COALESCE(sessions.user_id, excluded.user_id),
+                       profile = COALESCE(sessions.profile, excluded.profile),
+                       account_id = COALESCE(sessions.account_id, excluded.account_id),
+                       chat_id = COALESCE(sessions.chat_id, excluded.chat_id),
+                       thread_id = COALESCE(sessions.thread_id, excluded.thread_id),
+                       route_profile = COALESCE(sessions.route_profile, excluded.route_profile),
+                       model = COALESCE(sessions.model, excluded.model),
+                       model_config = COALESCE(sessions.model_config, excluded.model_config),
+                       system_prompt = COALESCE(sessions.system_prompt, excluded.system_prompt),
+                       parent_session_id = COALESCE(sessions.parent_session_id, excluded.parent_session_id)""",
                 (
                     session_id,
                     source,

@@ -62,6 +62,7 @@ from .config import (
 )
 from .whatsapp_identity import (
     canonical_whatsapp_identifier,
+    normalize_whatsapp_identifier,
 )
 from utils import atomic_replace
 
@@ -917,10 +918,21 @@ class SessionStore:
 
             self._entries[session_key] = entry
             self._save()
+            profile_name = None
+            try:
+                from hermes_cli.profiles import get_active_profile_name
+                profile_name = get_active_profile_name()
+            except Exception:
+                profile_name = os.environ.get("HERMES_PROFILE")
             db_create_kwargs = {
                 "session_id": session_id,
                 "source": source.platform.value,
                 "user_id": source.user_id,
+                "profile": profile_name,
+                "account_id": source.account_id,
+                "chat_id": source.chat_id,
+                "thread_id": source.thread_id,
+                "route_profile": source.route_profile,
             }
 
         # SQLite operations outside the lock
