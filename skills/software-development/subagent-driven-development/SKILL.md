@@ -211,6 +211,8 @@ git add -A && git commit -m "feat: complete [feature name] implementation"
 - Ignore subagent questions (answer before letting them proceed)
 - Accept "close enough" on spec compliance
 - Skip review loops (reviewer found issues → implementer fixes → review again)
+- Fix reviewer findings but skip rerunning build/tests/typecheck afterward
+- Report a task as complete after post-review fixes when the final changed state has not been re-verified
 - Let implementer self-review replace actual review (both are needed)
 - **Start code quality review before spec compliance is PASS** (wrong order)
 - Move to next task while either review has open issues

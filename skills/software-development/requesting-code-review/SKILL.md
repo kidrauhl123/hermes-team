@@ -40,6 +40,24 @@ If empty, try `git diff` then `git diff HEAD~1 HEAD`.
 If `git diff --cached` is empty but `git diff` shows changes, tell the user to
 `git add <files>` first. If still empty, run `git status` — nothing to verify.
 
+If the user explicitly asks to "review the whole repo" or "review then commit"
+and the worktree is already very dirty, do not blindly stage first. First map the
+scope and risk:
+
+```bash
+git status --short | wc -l
+git status --short | sed -n '1,260p'
+git diff --stat -- . ':(exclude)dist' ':(exclude)dist-electron'
+git diff --name-status -- . ':(exclude)dist' ':(exclude)dist-electron'
+```
+
+For large mixed diffs, run parallel independent review passes by concern rather
+than trying to fit the whole diff in one prompt: security/secrets, architecture
+and runtime logic, and commit suitability/scope. Only make minimal blocker fixes
+that do not broaden the change set. If the user still wants a checkpoint commit
+after risks are understood and verification passes, it is acceptable to commit a
+large mixed checkpoint, but report its size and that it is a checkpoint.
+
 If the diff exceeds 15,000 characters, split by file:
 ```bash
 git diff --name-only
@@ -72,6 +90,15 @@ git diff --cached | grep "^+" | grep -E "execute\(f\"|\.format\(.*SELECT|\.forma
 Detect the project language and run the appropriate tools. Capture the failure
 count BEFORE your changes as **baseline_failures** (stash changes, run, pop).
 Only NEW failures introduced by your changes block the commit.
+
+For repositories with known build scripts, prefer the project's proven verification
+commands over generic `npx tsc --noEmit`/`npm test` guesses. If a command-line
+flag fails because it is passed through to another tool (for example a Vite
+`CACError: Unknown option --pretty`), rerun the canonical script without the
+extra flag before treating it as a real failure.
+
+Always run `git diff --check` before committing. Whitespace errors are cheap to
+fix and will otherwise create noisy commits.
 
 **Test frameworks** (auto-detect by project files):
 ```bash
@@ -236,6 +263,28 @@ The `[verified]` prefix indicates an independent reviewer approved this change.
 
 ## Reference: Common Patterns to Flag
 
+### Multi-layer persistence / gateway changes
+
+When reviewing fixes that add provenance, tenancy, routing, authorization, or other
+isolation metadata across layers, do not stop at the leaf API tests. Trace the
+actual production write path end-to-end:
+
+1. Identify every creator/updater of the persistent row, not just the modified
+   function. Gateway/session stores, resume paths, caches, and legacy indexes may
+   write rows before the main agent does.
+2. Check idempotency semantics (`INSERT OR IGNORE`, upsert, `COALESCE`, unique
+   keys). A first write with partial metadata can permanently block a later write
+   with complete metadata.
+3. Verify default query scopes match the system's existing isolation semantics
+   (for example per-user group sessions, account/profile routing, thread scope,
+   or route profile/persona boundaries).
+4. Add or request tests for the real path order: gateway creates session -> agent
+   reuses same session -> search/recall filters it correctly. Component tests for
+   DB filtering alone are not sufficient.
+5. Prefer a fail-safe migration/upsert: new writes should include complete
+   metadata, and later complete writes should be able to backfill NULL fields
+   without overwriting already-populated values.
+
 ### Python
 ```python
 # Bad: SQL injection
@@ -277,3 +326,4 @@ tests exist, tests pass, no regressions.
 - **No test framework found** — skip regression check, reviewer verdict still runs
 - **Lint tools not installed** — skip that check silently, don't fail
 - **Auto-fix introduces new issues** — counts as a new failure, cycle continues
+- **Layered persistence false confidence** — for gateway/agent/database changes, component tests can pass while production call order still drops metadata. See `references/hermes-gateway-provenance-review.md` for the Hermes session provenance example.

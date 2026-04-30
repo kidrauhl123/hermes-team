@@ -296,6 +296,42 @@ terminal("pytest tests/test_feature.py::test_name -v")
 terminal("pytest tests/ -q")
 ```
 
+For TypeScript/Vitest projects, use the same RED-GREEN cadence with npm scripts:
+
+```bash
+# RED/GREEN — run one behavior test file
+npm test -- tests/feature.test.ts
+
+# Full verification before commit
+npm test
+npm run typecheck
+git diff --check
+```
+
+A first RED may be an expected import/module-not-found failure for a not-yet-created module when the test already specifies behavior. Then create the minimal module and rerun the same test until green.
+
+See `references/typescript-vitest-api-mvp.md` for a verified TypeScript/Vitest API MVP pattern, including Hono `app.request(...)` testing and the Node PATH pitfall on zuiyou's Mac.
+
+For TypeScript/Hono API MVP bootstraps, see `references/typescript-hono-api-mvp.md` for the proven test-first file layout, Hono `app.request(...)` testing pattern, NodeNext `.js` import pitfall, README verification checklist, and zuiyou's non-interactive Node PATH workaround.
+
+For evolving TypeScript APIs from mock providers into persistent provider/store architectures, see `references/typescript-sqlite-provider-persistence.md` for the verified TDD sequence, `node:sqlite` `DatabaseSync` transaction pitfall, fixture-provider mode, and SQLite smoke-test pattern.
+
+For adding a continuous provider sync worker on top of a provider/store architecture, see `references/typescript-provider-sync-worker.md` for the verified TDD sequence, sync status persistence schema, injectable-clock `SyncWorker` tests, worker env/scripts, and smoke-test pattern.
+
+For adding fact provenance and a minimal observability frontend to a TypeScript/Hono facts API, see `references/typescript-source-metadata-dashboard.md` for the verified source metadata TDD sequence, API pass-through tests, static dashboard route pattern, and smoke-test checklist.
+
+For debugging a static dashboard stuck on `Loading…` and adding a real public sports scoreboard provider, see `references/typescript-public-scoreboard-provider-dashboard-debug.md` for the inline-script parse regression test, ESPN scoreboard mapping pattern, provider config envs, and real-source smoke test.
+
+For broadening a TypeScript/Hono facts API from one scoreboard source into a multi-source provider with a dashboard dropdown filter, see `references/typescript-multi-source-dashboard-selector.md` for the `CompositeProvider` TDD sequence, `/api/sports` options endpoint, localized `<select>` dashboard pattern, broad ESPN defaults, and real-source smoke tests.
+
+For CodeMirror-based Markdown Live Preview work, see `references/codemirror-live-preview-regression-tests.md` for the verified App-level `EditorView` test pattern, exact syntax-range reveal rules, CSS visual-contract tests, list marker preview widgets, and Typica verification command set.
+
+For React Markdown renderers that need Obsidian/GitHub-style raw HTML while keeping an XSS sanitizer boundary, see `references/react-markdown-safe-raw-html.md` for the verified `rehype-raw` + `rehype-sanitize` TDD sequence, sanitizer schema pitfalls, CSS visual-contract pattern, and Typica verification command set.
+
+For adding a new real-world activity source to a TypeScript provider-driven facts API, see `references/typescript-world-activity-provider.md` for the verified Hacker News provider TDD sequence, deterministic `fetchJson`/`now` injection, world-mode `CompositeProvider` integration, category-specific smoke tests, and zuiyou Node PATH pitfall.
+
+For adding HTML-scraped world-activity providers and fixing post-aggregation filter leaks, see `references/typescript-html-world-activity-provider.md` for the snooker.org World Championship workflow, live/event page parsing strategy, status inference, `/api/happenings?sport=...` final-filter regression test, and live API smoke probe.
+
 ### With delegate_task
 
 When dispatching subagents for implementation, enforce TDD in the goal:

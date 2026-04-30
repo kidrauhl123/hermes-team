@@ -108,6 +108,46 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `ci`, `chore`, `perf`
 git push -u origin HEAD
 ```
 
+### Publishing a checkpoint when remote history differs
+
+If `git push` is rejected as non-fast-forward, inspect divergence before deciding to force push:
+
+```bash
+git fetch origin main
+git rev-list --left-right --count HEAD...origin/main
+git log --oneline --left-right --graph HEAD...origin/main | sed -n '1,80p'
+```
+
+If histories are unrelated or the remote has important bootstrap commits that should not be overwritten, avoid `--force`. To publish a local snapshot as a fast-forward on top of the remote, create a temporary branch from the remote tip, replace the index/worktree with the verified local tree, commit, and push:
+
+```bash
+LOCAL_SNAPSHOT=$(git rev-parse HEAD)
+git switch -c publish/checkpoint origin/main
+git read-tree --reset -u "$LOCAL_SNAPSHOT"
+git diff --cached --check
+git commit -m "chore: checkpoint verified changes"
+git push origin publish/checkpoint:main
+```
+
+If a large HTTPS push fails with `RPC failed; HTTP 400`, `unexpected disconnect`, or `remote end hung up unexpectedly`, retry once with HTTP/1.1 and a larger post buffer:
+
+```bash
+git config http.version HTTP/1.1
+git config http.postBuffer 524288000
+git push origin publish/checkpoint:main
+```
+
+After successful push, verify the remote ref and reset/switch local `main` only if the worktree is clean and the user accepts destructive reset:
+
+```bash
+git fetch origin main
+git rev-parse origin/main
+git status --short
+# destructive: only when safe/approved
+git switch main && git reset --hard origin/main
+git branch --set-upstream-to=origin/main main
+```
+
 ### Create the PR
 
 **With gh:**

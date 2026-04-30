@@ -201,6 +201,51 @@ git add docs/plans/
 git commit -m "docs: add implementation plan for [feature]"
 ```
 
+For early-stage product repos where the user asks for a "完整开发规划" and also says to continue implementation, write a roadmap plan that includes:
+- product direction and non-goals
+- completed milestones vs current milestone vs next/later milestones
+- exact implementation tasks with TDD commands
+- final verification and commit/push instructions
+
+Then proceed to implement the current milestone rather than stopping at the plan, unless the user explicitly asked for plan-only mode.
+
+### Maintaining a README as the living plan/progress log
+
+Use this when a project's root README is outdated, inherited from an upstream/template, or hard for the user to find, and the user wants the current development plan/progress to become the project front page.
+
+1. Preserve the old README instead of deleting it:
+
+```bash
+git mv README.md README.upstream.md  # or README.original.md if upstream is misleading
+```
+
+2. Promote the verified plan/log into `README.md` with a short real README intro first:
+   - Project name and one-paragraph positioning
+   - Current product direction / architecture in plain language
+   - Where the old README was moved
+   - Statement that checkpoints, verification commands, screenshots/log evidence, and next steps live here
+
+3. Keep the detailed plan/progress content below the intro. If the source plan remains under `docs/`, mark it as a historical copy or secondary reference so there is one clear main entry point.
+
+4. Verify before committing:
+
+```bash
+git diff --check
+sed -n '1,80p' README.md
+sed -n '1,20p' README.upstream.md
+git status --short
+```
+
+5. Commit and push as documentation work, then verify the remote ref:
+
+```bash
+git add README.md README.upstream.md
+git commit -m "docs: make development log the root readme"
+git push
+git status --short --branch
+git ls-remote <remote> refs/heads/<branch>
+```
+
 ## Principles
 
 ### DRY (Don't Repeat Yourself)
