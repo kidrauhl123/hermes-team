@@ -1,6 +1,6 @@
 # Hermes Team
 
-Hermes Team 是基于 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) 的 fork，目标是让 Hermes 更适合**一组长期在线的多机器人/多账号助手**：共享长期知识和技能，同时保持每个机器人、账号、聊天的身份与会话边界清晰。
+Hermes Team 是基于 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) 的 fork，目标是让 Hermes 更适合**一组长期在线的多机器人/多 IM 账号助手**：共享长期知识和技能，同时保持每个机器人、账号、聊天的身份与会话边界清晰。
 
 > 原版 Hermes Agent 的安装、完整功能说明和官方文档请看：
 > - 官方仓库：[NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
@@ -8,14 +8,14 @@ Hermes Team 是基于 [NousResearch/hermes-agent](https://github.com/NousResearc
 
 ## 与原版 Hermes 的主要区别
 
-### 1. 单 gateway 多 Feishu/Lark 账号
+### 1. 单 gateway 多 IM 账号
 
-原版 Hermes 通常按“一个机器人账号 = 一个 profile = 一个 gateway 进程”部署。Hermes Team 支持在同一个 gateway 进程里连接多个 Feishu/Lark 机器人账号。
+原版 Hermes 通常按“一个机器人账号 = 一个 profile = 一个 gateway 进程”部署。Hermes Team 的设计目标是让同一个 gateway 进程可以承载多个 IM 机器人账号。当前实现已在 Feishu/Lark 适配器上验证；同一套账号路由、session provenance、persona 分层和会话隔离模型也适用于 Telegram、Slack、Discord、Matrix、WhatsApp 等 IM 平台的多账号适配。
 
 - 每个账号有独立的 `account_id` 和路由上下文。
 - 收消息、发消息、编辑消息、进度提示、忙碌提示等都会按来源账号路由。
-- 日志会带账号标识，例如 `[Feishu:1] Connected in websocket mode`。
-- 多账号启动采用 fail-closed 语义：配置了多个账号时，如果任一账号未能就绪，Feishu multi-account gateway 会整体启动失败，避免“看起来在线但部分账号不可用”。
+- 日志和 session provenance 会带账号/来源标识，方便排查。
+- 多账号启动采用 fail-closed 语义：配置了多个账号时，如果任一账号未能就绪，multi-account gateway 会整体启动失败，避免“看起来在线但部分账号不可用”。
 
 ### 2. 多机器人 persona / soul 分层
 
@@ -78,16 +78,16 @@ route_profile（已知时）
 
 跨账号、跨聊天或跨 profile 的结果会带 `provenance`，例如 `source`、`profile`、`account_id`、`chat_id`、`thread_id`、`route_profile`。缺少 provenance 的旧 session 不会混进默认 `current_chat` 检索。
 
-### 5. 多账号 Feishu websocket 更适合单进程运行
+### 5. 多账号 IM 连接更适合单进程运行
 
-Hermes Team 对 Feishu/Lark websocket 多账号运行做了适配，包括：
+Hermes Team 对单进程多账号连接做了更严格的可观测性和就绪判断。Feishu/Lark websocket 是当前已验证的实现，包括：
 
 - account-aware websocket lifecycle；
 - readiness barrier，确认账号真正 connected 后才标记可用；
 - websocket thread 异常传播；
-- 可配置 readiness timeout，例如 `FEISHU_WS_READY_TIMEOUT=60`。
+- 可配置 readiness timeout。
 
-这些改动让一个 gateway 同时维护多个 Feishu/Lark 机器人连接时更可观测、更不容易出现部分账号静默失败。
+这些改动让一个 gateway 同时维护多个 IM 机器人连接时更可观测、更不容易出现部分账号静默失败。
 
 ## 推荐部署形态
 
@@ -116,7 +116,7 @@ TeamA / 多机器人统一 gateway
 
 ## 当前状态
 
-这是面向多 Feishu/Lark 机器人长期运行的个人 fork。它保留上游 Hermes 的核心能力，并在多账号 gateway、persona 隔离、共享记忆、会话检索隔离等方面做了扩展。
+这是面向多 IM 机器人长期运行的个人 fork。它保留上游 Hermes 的核心能力，并在多账号 gateway、persona 隔离、共享记忆、会话检索隔离等方面做了扩展。当前多账号 gateway 的主要实测平台是 Feishu/Lark，但设计本身不限定于 Feishu/Lark。
 
 ## License
 
