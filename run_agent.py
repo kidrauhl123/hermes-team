@@ -924,6 +924,7 @@ class AIAgent:
         chat_type: str = None,
         thread_id: str = None,
         account_id: str = None,
+        route_profile: str = None,
         gateway_session_key: str = None,
         skip_context_files: bool = False,
         skip_memory: bool = False,
@@ -997,7 +998,13 @@ class AIAgent:
         self._chat_name = chat_name
         self._chat_type = chat_type
         self._thread_id = thread_id
-        self._account_id = account_id
+        self._account_id = str(account_id) if account_id is not None else None
+        self._route_profile = route_profile
+        try:
+            from hermes_cli.profiles import get_active_profile_name
+            self._profile = get_active_profile_name()
+        except Exception:
+            self._profile = os.environ.get("HERMES_PROFILE")
         self._gateway_session_key = gateway_session_key  # Stable per-chat key (e.g. agent:main:telegram:dm:123)
         # Pluggable print function — CLI replaces this with _cprint so that
         # raw ANSI status lines are routed through prompt_toolkit's renderer
@@ -1610,7 +1617,12 @@ class AIAgent:
                         "reasoning_config": reasoning_config,
                         "max_tokens": max_tokens,
                     },
-                    user_id=None,
+                    user_id=self._user_id,
+                    profile=self._profile,
+                    account_id=self._account_id,
+                    chat_id=self._chat_id,
+                    thread_id=self._thread_id,
+                    route_profile=self._route_profile,
                     parent_session_id=self._parent_session_id,
                 )
             except Exception as e:
@@ -3630,6 +3642,12 @@ class AIAgent:
                 self.session_id,
                 source=self.platform or "cli",
                 model=self.model,
+                user_id=self._user_id,
+                profile=self._profile,
+                account_id=self._account_id,
+                chat_id=self._chat_id,
+                thread_id=self._thread_id,
+                route_profile=self._route_profile,
             )
             start_idx = len(conversation_history) if conversation_history else 0
             flush_from = max(start_idx, self._last_flushed_db_idx)
@@ -8890,6 +8908,12 @@ class AIAgent:
                     session_id=self.session_id,
                     source=self.platform or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
                     model=self.model,
+                    user_id=self._user_id,
+                    profile=self._profile,
+                    account_id=self._account_id,
+                    chat_id=self._chat_id,
+                    thread_id=self._thread_id,
+                    route_profile=self._route_profile,
                     parent_session_id=old_session_id,
                 )
                 # Auto-number the title for the continuation session
@@ -9034,6 +9058,14 @@ class AIAgent:
                 limit=function_args.get("limit", 3),
                 db=self._session_db,
                 current_session_id=self.session_id,
+                current_user_id=self._user_id,
+                scope=function_args.get("scope", "current_chat"),
+                current_source=self.platform or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
+                current_profile=self._profile,
+                current_account_id=self._account_id,
+                current_chat_id=self._chat_id,
+                current_thread_id=self._thread_id,
+                current_route_profile=self._route_profile,
             )
         elif function_name == "memory":
             target = function_args.get("target", "memory")
@@ -9574,6 +9606,14 @@ class AIAgent:
                         limit=function_args.get("limit", 3),
                         db=self._session_db,
                         current_session_id=self.session_id,
+                        current_user_id=self._user_id,
+                        scope=function_args.get("scope", "current_chat"),
+                        current_source=self.platform or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
+                        current_profile=self._profile,
+                        current_account_id=self._account_id,
+                        current_chat_id=self._chat_id,
+                        current_thread_id=self._thread_id,
+                        current_route_profile=self._route_profile,
                     )
                 tool_duration = time.time() - tool_start_time
                 if self._should_emit_quiet_tool_messages():

@@ -242,6 +242,23 @@ class TestSessionSearchConcurrency:
 
 
 class TestRecentSessionListing:
+    def test_scopes_recent_sessions_to_current_user_id(self):
+        from unittest.mock import MagicMock
+
+        mock_db = MagicMock()
+        mock_db.list_sessions_rich.return_value = []
+
+        result = json.loads(_list_recent_sessions(
+            mock_db,
+            limit=5,
+            current_session_id="current_sid",
+            current_user_id="user_a",
+        ))
+
+        assert result["success"] is True
+        mock_db.list_sessions_rich.assert_called_once()
+        assert mock_db.list_sessions_rich.call_args.kwargs["user_id"] == "user_a"
+
     def test_current_child_session_excludes_root_lineage_even_when_child_id_is_longer(self):
         from unittest.mock import MagicMock
 
@@ -333,6 +350,148 @@ class TestSessionSearch:
         assert result["success"] is True
         assert result["count"] == 0
         assert result["results"] == []
+
+    def test_search_scopes_to_current_user_id_before_summarizing(self):
+        """Gateway session_search must not retrieve another bot/user's sessions."""
+        from unittest.mock import MagicMock
+        from tools.session_search_tool import session_search
+
+        mock_db = MagicMock()
+        mock_db.search_messages.return_value = []
+
+        result = json.loads(session_search(
+            query="AI Agent 工作台",
+            db=mock_db,
+            current_session_id="current_sid",
+            current_user_id="user_a",
+        ))
+
+        assert result["success"] is True
+        mock_db.search_messages.assert_called_once()
+        assert mock_db.search_messages.call_args.kwargs["user_id"] == "user_a"
+
+    def test_search_derives_scope_from_current_session_when_user_id_not_passed(self):
+        """Direct callers still get isolation when the current session row has user_id."""
+        from unittest.mock import MagicMock
+        from tools.session_search_tool import session_search
+
+        mock_db = MagicMock()
+        mock_db.get_session.return_value = {"user_id": "user_a", "parent_session_id": None}
+        mock_db.search_messages.return_value = []
+
+        result = json.loads(session_search(
+            query="AI Agent 工作台",
+            db=mock_db,
+            current_session_id="current_sid",
+        ))
+
+        assert result["success"] is True
+        assert mock_db.search_messages.call_args.kwargs["user_id"] == "user_a"
+
+
+    def test_default_scope_is_current_chat(self):
+        from unittest.mock import MagicMock
+        from tools.session_search_tool import session_search
+
+        mock_db = MagicMock()
+        mock_db.search_messages.return_value = []
+
+        result = json.loads(session_search(
+            query="shared", db=mock_db, current_session_id="sid", current_source="feishu",
+            current_profile="TeamA", current_account_id="2", current_chat_id="chat_a",
+            current_thread_id=None, current_user_id="user",
+        ))
+
+        assert result["success"] is True
+        kwargs = mock_db.search_messages.call_args.kwargs
+        assert kwargs["source"] == "feishu"
+        assert kwargs["profile"] == "TeamA"
+        assert kwargs["account_id"] == "2"
+        assert kwargs["chat_id"] == "chat_a"
+        assert kwargs["thread_id"] is None
+
+    def test_scope_current_account_relaxes_chat_only(self):
+        from unittest.mock import MagicMock
+        from tools.session_search_tool import session_search
+
+        mock_db = MagicMock()
+        mock_db.search_messages.return_value = []
+
+        session_search(
+            query="shared", db=mock_db, scope="current_account", current_source="feishu",
+            current_profile="TeamA", current_account_id="2", current_chat_id="chat_a", current_user_id="user",
+        )
+
+        kwargs = mock_db.search_messages.call_args.kwargs
+        assert kwargs["source"] == "feishu"
+        assert kwargs["profile"] == "TeamA"
+        assert kwargs["account_id"] == "2"
+        assert kwargs.get("chat_id") is None
+
+    def test_scope_current_profile_relaxes_account_and_chat(self):
+        from unittest.mock import MagicMock
+        from tools.session_search_tool import session_search
+
+        mock_db = MagicMock()
+        mock_db.search_messages.return_value = []
+
+        session_search(
+            query="shared", db=mock_db, scope="current_profile", current_source="feishu",
+            current_profile="TeamA", current_account_id="2", current_chat_id="chat_a", current_user_id="user",
+        )
+
+        kwargs = mock_db.search_messages.call_args.kwargs
+        assert kwargs["profile"] == "TeamA"
+        assert kwargs.get("source") is None
+        assert kwargs.get("account_id") is None
+        assert kwargs.get("chat_id") is None
+
+    def test_scope_global_does_not_apply_provenance_filters(self):
+        from unittest.mock import MagicMock
+        from tools.session_search_tool import session_search
+
+        mock_db = MagicMock()
+        mock_db.search_messages.return_value = []
+
+        session_search(
+            query="shared", db=mock_db, scope="global", current_source="feishu",
+            current_profile="TeamA", current_account_id="2", current_chat_id="chat_a", current_user_id="user",
+        )
+
+        kwargs = mock_db.search_messages.call_args.kwargs
+        assert kwargs.get("source") is None
+        assert kwargs.get("profile") is None
+        assert kwargs.get("account_id") is None
+        assert kwargs.get("chat_id") is None
+        assert kwargs.get("user_id") is None
+
+    def test_cross_scope_results_include_provenance(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from tools.session_search_tool import session_search
+
+        async def fake_summarize(_text, _query, _meta):
+            return "summary"
+
+        monkeypatch.setattr("tools.session_search_tool._summarize_session", fake_summarize)
+        monkeypatch.setattr("model_tools._run_async", lambda coro: asyncio.run(coro))
+
+        mock_db = MagicMock()
+        mock_db.search_messages.return_value = [{
+            "session_id": "other", "source": "feishu", "session_started": 1, "model": "m",
+            "profile": "TeamA", "account_id": "3", "chat_id": "chat_b", "thread_id": None, "route_profile": "feishu-bot-4",
+        }]
+        mock_db.get_session.return_value = {
+            "id": "other", "parent_session_id": None, "source": "feishu", "profile": "TeamA",
+            "account_id": "3", "chat_id": "chat_b", "thread_id": None, "route_profile": "feishu-bot-4", "started_at": 1,
+        }
+        mock_db.get_messages_as_conversation.return_value = [{"role": "user", "content": "shared"}]
+
+        result = json.loads(session_search(query="shared", db=mock_db, scope="current_profile", current_profile="TeamA"))
+
+        assert result["results"][0]["provenance"] == {
+            "source": "feishu", "profile": "TeamA", "account_id": "3",
+            "chat_id": "chat_b", "thread_id": None, "route_profile": "feishu-bot-4", "user_id": None,
+        }
 
     def test_current_session_excluded_keeps_others(self):
         """Other sessions should still be returned when current is excluded."""

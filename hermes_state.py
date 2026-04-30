@@ -33,7 +33,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -44,6 +44,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
     user_id TEXT,
+    profile TEXT,
+    account_id TEXT,
+    chat_id TEXT,
+    thread_id TEXT,
+    route_profile TEXT,
     model TEXT,
     model_config TEXT,
     system_prompt TEXT,
@@ -487,14 +492,18 @@ class SessionDB:
                     (SCHEMA_VERSION,),
                 )
 
-        # Unique title index — always ensure it exists
-        try:
-            cursor.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_title_unique "
-                "ON sessions(title) WHERE title IS NOT NULL"
-            )
-        except sqlite3.OperationalError:
-            pass  # Index already exists
+        # Indexes that reference reconciled columns must be created after
+        # _reconcile_columns() has added them on legacy databases.
+        for _index_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_sessions_profile ON sessions(profile)",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_current_chat ON sessions(source, profile, account_id, chat_id, thread_id)",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_current_account ON sessions(source, profile, account_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_title_unique ON sessions(title) WHERE title IS NOT NULL",
+        ):
+            try:
+                cursor.execute(_index_sql)
+            except sqlite3.OperationalError:
+                pass
 
         # FTS5 setup (separate because CREATE VIRTUAL TABLE can't be in executescript with IF NOT EXISTS reliably)
         try:
@@ -522,18 +531,29 @@ class SessionDB:
         model_config: Dict[str, Any] = None,
         system_prompt: str = None,
         user_id: str = None,
+        profile: str = None,
+        account_id: str = None,
+        chat_id: str = None,
+        thread_id: str = None,
+        route_profile: str = None,
         parent_session_id: str = None,
     ) -> str:
         """Create a new session record. Returns the session_id."""
         def _do(conn):
             conn.execute(
-                """INSERT OR IGNORE INTO sessions (id, source, user_id, model, model_config,
+                """INSERT OR IGNORE INTO sessions (id, source, user_id, profile,
+                   account_id, chat_id, thread_id, route_profile, model, model_config,
                    system_prompt, parent_session_id, started_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     source,
                     user_id,
+                    profile,
+                    account_id,
+                    chat_id,
+                    thread_id,
+                    route_profile,
                     model,
                     json.dumps(model_config) if model_config else None,
                     system_prompt,
@@ -679,6 +699,12 @@ class SessionDB:
         session_id: str,
         source: str = "unknown",
         model: str = None,
+        user_id: str = None,
+        profile: str = None,
+        account_id: str = None,
+        chat_id: str = None,
+        thread_id: str = None,
+        route_profile: str = None,
     ) -> None:
         """Ensure a session row exists, creating it with minimal metadata if absent.
 
@@ -689,9 +715,13 @@ class SessionDB:
         def _do(conn):
             conn.execute(
                 """INSERT OR IGNORE INTO sessions
-                   (id, source, model, started_at)
-                   VALUES (?, ?, ?, ?)""",
-                (session_id, source, model, time.time()),
+                   (id, source, user_id, profile, account_id, chat_id,
+                    thread_id, route_profile, model, started_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id, source, user_id, profile, account_id, chat_id,
+                    thread_id, route_profile, model, time.time(),
+                ),
             )
         self._execute_write(_do)
 
@@ -929,6 +959,12 @@ class SessionDB:
         self,
         source: str = None,
         exclude_sources: List[str] = None,
+        user_id: str = None,
+        profile: str = None,
+        account_id: str = None,
+        chat_id: str = None,
+        thread_id: str = None,
+        route_profile: str = None,
         limit: int = 20,
         offset: int = 0,
         include_children: bool = False,
@@ -977,6 +1013,26 @@ class SessionDB:
             placeholders = ",".join("?" for _ in exclude_sources)
             where_clauses.append(f"s.source NOT IN ({placeholders})")
             params.extend(exclude_sources)
+        if user_id is not None:
+            where_clauses.append("s.user_id = ?")
+            params.append(user_id)
+        if profile is not None:
+            where_clauses.append("s.profile = ?")
+            params.append(profile)
+        if account_id is not None:
+            where_clauses.append("s.account_id = ?")
+            params.append(str(account_id))
+        if chat_id is not None:
+            where_clauses.append("s.chat_id = ?")
+            params.append(str(chat_id))
+        if thread_id is not None:
+            where_clauses.append("s.thread_id = ?")
+            params.append(str(thread_id))
+        elif chat_id is not None:
+            where_clauses.append("s.thread_id IS NULL")
+        if route_profile is not None:
+            where_clauses.append("s.route_profile = ?")
+            params.append(route_profile)
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         query = f"""
@@ -1533,6 +1589,13 @@ class SessionDB:
         query: str,
         source_filter: List[str] = None,
         exclude_sources: List[str] = None,
+        user_id: str = None,
+        source: str = None,
+        profile: str = None,
+        account_id: str = None,
+        chat_id: str = None,
+        thread_id: str = None,
+        route_profile: str = None,
         role_filter: List[str] = None,
         limit: int = 20,
         offset: int = 0,
@@ -1560,6 +1623,28 @@ class SessionDB:
         where_clauses = ["messages_fts MATCH ?"]
         params: list = [query]
 
+        def _add_provenance_filters(where: list, bind: list) -> None:
+            if source is not None:
+                where.append("s.source = ?")
+                bind.append(source)
+            if profile is not None:
+                where.append("s.profile = ?")
+                bind.append(profile)
+            if account_id is not None:
+                where.append("s.account_id = ?")
+                bind.append(str(account_id))
+            if chat_id is not None:
+                where.append("s.chat_id = ?")
+                bind.append(str(chat_id))
+            if thread_id is not None:
+                where.append("s.thread_id = ?")
+                bind.append(str(thread_id))
+            elif chat_id is not None:
+                where.append("s.thread_id IS NULL")
+            if route_profile is not None:
+                where.append("s.route_profile = ?")
+                bind.append(route_profile)
+
         if source_filter is not None:
             source_placeholders = ",".join("?" for _ in source_filter)
             where_clauses.append(f"s.source IN ({source_placeholders})")
@@ -1569,6 +1654,11 @@ class SessionDB:
             exclude_placeholders = ",".join("?" for _ in exclude_sources)
             where_clauses.append(f"s.source NOT IN ({exclude_placeholders})")
             params.extend(exclude_sources)
+
+        if user_id is not None:
+            where_clauses.append("s.user_id = ?")
+            params.append(user_id)
+        _add_provenance_filters(where_clauses, params)
 
         if role_filter:
             role_placeholders = ",".join("?" for _ in role_filter)
@@ -1588,6 +1678,12 @@ class SessionDB:
                 m.timestamp,
                 m.tool_name,
                 s.source,
+                s.user_id,
+                s.profile,
+                s.account_id,
+                s.chat_id,
+                s.thread_id,
+                s.route_profile,
                 s.model,
                 s.started_at AS session_started
             FROM messages_fts
@@ -1632,6 +1728,10 @@ class SessionDB:
                 if exclude_sources is not None:
                     tri_where.append(f"s.source NOT IN ({','.join('?' for _ in exclude_sources)})")
                     tri_params.extend(exclude_sources)
+                if user_id is not None:
+                    tri_where.append("s.user_id = ?")
+                    tri_params.append(user_id)
+                _add_provenance_filters(tri_where, tri_params)
                 if role_filter:
                     tri_where.append(f"m.role IN ({','.join('?' for _ in role_filter)})")
                     tri_params.extend(role_filter)
@@ -1645,6 +1745,12 @@ class SessionDB:
                         m.timestamp,
                         m.tool_name,
                         s.source,
+                        s.user_id,
+                        s.profile,
+                        s.account_id,
+                        s.chat_id,
+                        s.thread_id,
+                        s.route_profile,
                         s.model,
                         s.started_at AS session_started
                     FROM messages_fts_trigram
@@ -1674,6 +1780,10 @@ class SessionDB:
                 if exclude_sources is not None:
                     like_where.append(f"s.source NOT IN ({','.join('?' for _ in exclude_sources)})")
                     like_params.extend(exclude_sources)
+                if user_id is not None:
+                    like_where.append("s.user_id = ?")
+                    like_params.append(user_id)
+                _add_provenance_filters(like_where, like_params)
                 if role_filter:
                     like_where.append(f"m.role IN ({','.join('?' for _ in role_filter)})")
                     like_params.extend(role_filter)
@@ -1683,7 +1793,8 @@ class SessionDB:
                                   max(1, instr(m.content, ?) - 40),
                                   120) AS snippet,
                            m.content, m.timestamp, m.tool_name,
-                           s.source, s.model, s.started_at AS session_started
+                           s.source, s.user_id, s.profile, s.account_id, s.chat_id,
+                           s.thread_id, s.route_profile, s.model, s.started_at AS session_started
                     FROM messages m
                     JOIN sessions s ON s.id = m.session_id
                     WHERE {' AND '.join(like_where)}

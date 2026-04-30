@@ -10635,6 +10635,7 @@ class GatewayRunner:
                     chat_type=source.chat_type,
                     thread_id=source.thread_id,
                     account_id=getattr(source, "account_id", None),
+                    route_profile=getattr(source, "route_profile", None),
                     gateway_session_key=session_key,
                     session_db=self._session_db,
                     fallback_model=self._fallback_model,

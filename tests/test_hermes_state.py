@@ -35,6 +35,14 @@ class TestSessionLifecycle:
         assert session["model"] == "test-model"
         assert session["ended_at"] is None
 
+    def test_ensure_session_persists_user_id(self, db):
+        db.ensure_session("s_user", source="feishu", model="test-model", user_id="user_a")
+
+        session = db.get_session("s_user")
+
+        assert session["user_id"] == "user_a"
+        assert session["source"] == "feishu"
+
     def test_get_nonexistent_session(self, db):
         assert db.get_session("nonexistent") is None
 
@@ -472,6 +480,63 @@ class TestFTS5Search:
         found_sources = {r["source"] for r in results}
         assert found_sources == {"cli", "telegram", "signal", "homeassistant", "acp", "matrix"}
 
+    def test_search_messages_filters_by_user_id(self, db):
+        db.create_session(session_id="s_user_a", source="feishu", user_id="user_a")
+        db.create_session(session_id="s_user_b", source="feishu", user_id="user_b")
+        db.append_message("s_user_a", role="user", content="shared keyword from user A")
+        db.append_message("s_user_b", role="user", content="shared keyword from user B")
+
+        results = db.search_messages("shared keyword", user_id="user_a")
+
+        assert [r["session_id"] for r in results] == ["s_user_a"]
+
+
+    def test_search_messages_filters_by_current_chat_provenance(self, db):
+        db.create_session(session_id="same_chat", source="feishu", user_id="user", profile="TeamA", account_id="2", chat_id="chat_a", thread_id=None, route_profile="feishu-bot-3")
+        db.create_session(session_id="other_account", source="feishu", user_id="user", profile="TeamA", account_id="3", chat_id="chat_a", thread_id=None, route_profile="feishu-bot-4")
+        db.create_session(session_id="other_chat", source="feishu", user_id="user", profile="TeamA", account_id="2", chat_id="chat_b", thread_id=None, route_profile="feishu-bot-3")
+        db.create_session(session_id="unknown_old", source="feishu", user_id="user")
+        for sid in ("same_chat", "other_account", "other_chat", "unknown_old"):
+            db.append_message(sid, role="user", content="shared phaseb keyword")
+
+        results = db.search_messages(
+            "shared phaseb keyword",
+            source="feishu",
+            profile="TeamA",
+            account_id="2",
+            chat_id="chat_a",
+            thread_id=None,
+        )
+
+        assert [r["session_id"] for r in results] == ["same_chat"]
+
+    def test_list_sessions_rich_filters_by_provenance_scope(self, db):
+        db.create_session(session_id="same_chat", source="feishu", profile="TeamA", account_id="2", chat_id="chat_a", thread_id=None)
+        db.create_session(session_id="same_account_other_chat", source="feishu", profile="TeamA", account_id="2", chat_id="chat_b", thread_id=None)
+        db.create_session(session_id="other_account", source="feishu", profile="TeamA", account_id="3", chat_id="chat_a", thread_id=None)
+
+        current_chat = db.list_sessions_rich(source="feishu", profile="TeamA", account_id="2", chat_id="chat_a", thread_id=None)
+        current_account = db.list_sessions_rich(source="feishu", profile="TeamA", account_id="2")
+        current_profile = db.list_sessions_rich(profile="TeamA")
+
+        assert [s["id"] for s in current_chat] == ["same_chat"]
+        assert {s["id"] for s in current_account} == {"same_chat", "same_account_other_chat"}
+        assert {s["id"] for s in current_profile} == {"same_chat", "same_account_other_chat", "other_account"}
+
+    def test_create_session_persists_provenance_fields(self, db):
+        db.create_session(
+            session_id="s_provenance", source="feishu", user_id="user", profile="TeamA",
+            account_id="2", chat_id="chat_a", thread_id="thread_1", route_profile="feishu-bot-3"
+        )
+
+        row = db.get_session("s_provenance")
+
+        assert row["profile"] == "TeamA"
+        assert row["account_id"] == "2"
+        assert row["chat_id"] == "chat_a"
+        assert row["thread_id"] == "thread_1"
+        assert row["route_profile"] == "feishu-bot-3"
+
     def test_search_with_role_filter(self, db):
         db.create_session(session_id="s1", source="cli")
         db.append_message("s1", role="user", content="What is FastAPI?")
@@ -865,6 +930,16 @@ class TestCJKSearchFallback:
 # =========================================================================
 
 class TestSearchSessions:
+    def test_list_sessions_rich_filters_by_user_id(self, db):
+        db.create_session(session_id="s_user_a", source="feishu", user_id="user_a")
+        db.create_session(session_id="s_user_b", source="feishu", user_id="user_b")
+        db.append_message("s_user_a", role="user", content="hello from user A")
+        db.append_message("s_user_b", role="user", content="hello from user B")
+
+        sessions = db.list_sessions_rich(user_id="user_a")
+
+        assert [s["id"] for s in sessions] == ["s_user_a"]
+
     def test_list_all_sessions(self, db):
         db.create_session(session_id="s1", source="cli")
         db.create_session(session_id="s2", source="telegram")
@@ -1316,7 +1391,7 @@ class TestSchemaInit:
     def test_schema_version(self, db):
         cursor = db._conn.execute("SELECT version FROM schema_version")
         version = cursor.fetchone()[0]
-        assert version == 11
+        assert version == 12
 
     def test_title_column_exists(self, db):
         """Verify the title column was created in the sessions table."""
@@ -1377,7 +1452,7 @@ class TestSchemaInit:
 
         # Verify migration
         cursor = migrated_db._conn.execute("SELECT version FROM schema_version")
-        assert cursor.fetchone()[0] == 11
+        assert cursor.fetchone()[0] == 12
 
         # Verify title column exists and is NULL for existing sessions
         session = migrated_db.get_session("existing")
@@ -2481,7 +2556,7 @@ class TestFTS5ToolCallMigration:
                 "SELECT version FROM schema_version LIMIT 1"
             ).fetchone()
             version = row["version"] if hasattr(row, "keys") else row[0]
-            assert version == 11
+            assert version == 12
         finally:
             session_db.close()
 

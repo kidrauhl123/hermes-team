@@ -263,10 +263,125 @@ async def _summarize_session(
 _HIDDEN_SESSION_SOURCES = ("tool",)
 
 
-def _list_recent_sessions(db, limit: int, current_session_id: str = None) -> str:
+_SESSION_SEARCH_SCOPES = {"current_chat", "current_account", "current_profile", "global"}
+_PROVENANCE_KEYS = ("source", "profile", "account_id", "chat_id", "thread_id", "route_profile", "user_id")
+
+
+def _session_user_scope(db, current_session_id: str = None, current_user_id: str = None) -> Optional[str]:
+    """Return the legacy user_id fallback scope when known.
+
+    This is intentionally a fallback only.  Gateway recall now prefers explicit
+    provenance (source/profile/account/chat/thread) so one Feishu account/bot
+    cannot see another by default.
+    """
+    if current_user_id:
+        return current_user_id
+    if not current_session_id:
+        return None
+    try:
+        session = db.get_session(current_session_id) or {}
+        return session.get("user_id") or None
+    except Exception:
+        return None
+
+
+def _normalize_scope(scope: str = None) -> str:
+    scope = (scope or "current_chat").strip().lower()
+    return scope if scope in _SESSION_SEARCH_SCOPES else "current_chat"
+
+
+def _current_provenance(
+    db,
+    current_session_id: str = None,
+    current_source: str = None,
+    current_profile: str = None,
+    current_account_id: str = None,
+    current_chat_id: str = None,
+    current_thread_id: str = None,
+    current_route_profile: str = None,
+    current_user_id: str = None,
+) -> Dict[str, Any]:
+    """Build current session provenance from live gateway args, falling back to DB."""
+    ctx = {
+        "source": current_source,
+        "profile": current_profile,
+        "account_id": str(current_account_id) if current_account_id is not None else None,
+        "chat_id": str(current_chat_id) if current_chat_id is not None else None,
+        "thread_id": str(current_thread_id) if current_thread_id is not None else None,
+        "route_profile": current_route_profile,
+        "user_id": current_user_id,
+    }
+    if current_session_id:
+        try:
+            row = db.get_session(current_session_id) or {}
+            if not isinstance(row, dict):
+                row = {}
+        except Exception:
+            row = {}
+        for key in _PROVENANCE_KEYS:
+            if ctx.get(key) is None and row.get(key) is not None:
+                ctx[key] = str(row.get(key)) if key in {"account_id", "chat_id", "thread_id"} else row.get(key)
+    return ctx
+
+
+def _filters_for_scope(scope: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate a recall scope into SessionDB filter kwargs."""
+    scope = _normalize_scope(scope)
+    if scope == "global":
+        return {}
+    if scope == "current_profile":
+        if ctx.get("profile"):
+            return {"profile": ctx["profile"]}
+        return {"user_id": ctx["user_id"]} if ctx.get("user_id") else {}
+    if scope == "current_account":
+        keys = ("source", "profile", "account_id")
+        if all(ctx.get(k) is not None for k in keys):
+            return {k: ctx[k] for k in keys}
+        return {"user_id": ctx["user_id"]} if ctx.get("user_id") else {}
+
+    # Default: strict current chat.  Unknown-provenance legacy rows are not
+    # included here because they will fail the exact chat/account predicates.
+    keys = ("source", "profile", "account_id", "chat_id")
+    if all(ctx.get(k) is not None for k in keys):
+        return {
+            "source": ctx["source"],
+            "profile": ctx["profile"],
+            "account_id": ctx["account_id"],
+            "chat_id": ctx["chat_id"],
+            "thread_id": ctx.get("thread_id"),
+        }
+    return {"user_id": ctx["user_id"]} if ctx.get("user_id") else {}
+
+
+def _session_provenance(meta: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: meta.get(key) for key in _PROVENANCE_KEYS}
+
+
+def _list_recent_sessions(
+    db,
+    limit: int,
+    current_session_id: str = None,
+    current_user_id: str = None,
+    scope: str = "current_chat",
+    current_source: str = None,
+    current_profile: str = None,
+    current_account_id: str = None,
+    current_chat_id: str = None,
+    current_thread_id: str = None,
+    current_route_profile: str = None,
+) -> str:
     """Return metadata for the most recent sessions (no LLM calls)."""
     try:
-        sessions = db.list_sessions_rich(limit=limit + 5, exclude_sources=list(_HIDDEN_SESSION_SOURCES))  # fetch extra to skip current
+        ctx = _current_provenance(
+            db, current_session_id, current_source, current_profile, current_account_id,
+            current_chat_id, current_thread_id, current_route_profile, current_user_id,
+        )
+        scope_filters = _filters_for_scope(scope, ctx)
+        sessions = db.list_sessions_rich(
+            limit=limit + 5,
+            exclude_sources=list(_HIDDEN_SESSION_SOURCES),
+            **scope_filters,
+        )  # fetch extra to skip current
 
         # Resolve current session lineage to exclude it
         current_root = None
@@ -300,6 +415,7 @@ def _list_recent_sessions(db, limit: int, current_session_id: str = None) -> str
                 "last_active": s.get("last_active", ""),
                 "message_count": s.get("message_count", 0),
                 "preview": s.get("preview", ""),
+                "provenance": _session_provenance(s),
             })
             if len(results) >= limit:
                 break
@@ -322,6 +438,14 @@ def session_search(
     limit: int = 3,
     db=None,
     current_session_id: str = None,
+    current_user_id: str = None,
+    scope: str = "current_chat",
+    current_source: str = None,
+    current_profile: str = None,
+    current_account_id: str = None,
+    current_chat_id: str = None,
+    current_thread_id: str = None,
+    current_route_profile: str = None,
 ) -> str:
     """
     Search past sessions and return focused summaries of matching conversations.
@@ -345,9 +469,19 @@ def session_search(
     # Recent sessions mode: when query is empty, return metadata for recent sessions.
     # No LLM calls — just DB queries for titles, previews, timestamps.
     if not query or not query.strip():
-        return _list_recent_sessions(db, limit, current_session_id)
+        return _list_recent_sessions(
+            db, limit, current_session_id, current_user_id, scope, current_source,
+            current_profile, current_account_id, current_chat_id, current_thread_id,
+            current_route_profile,
+        )
 
     query = query.strip()
+    scope = _normalize_scope(scope)
+    ctx = _current_provenance(
+        db, current_session_id, current_source, current_profile, current_account_id,
+        current_chat_id, current_thread_id, current_route_profile, current_user_id,
+    )
+    scope_filters = _filters_for_scope(scope, ctx)
 
     try:
         # Parse role filter
@@ -360,6 +494,7 @@ def session_search(
             query=query,
             role_filter=role_list,
             exclude_sources=list(_HIDDEN_SESSION_SOURCES),
+            **scope_filters,
             limit=50,  # Get more matches to find unique sessions
             offset=0,
         )
@@ -492,6 +627,7 @@ def session_search(
                 "when": _format_timestamp(match_info.get("session_started")),
                 "source": match_info.get("source", "unknown"),
                 "model": match_info.get("model"),
+                "provenance": _session_provenance(match_info),
             }
 
             if result:
@@ -507,6 +643,7 @@ def session_search(
         return json.dumps({
             "success": True,
             "query": query,
+            "scope": scope,
             "results": summaries,
             "count": len(summaries),
             "sessions_searched": len(seen_sessions),
@@ -567,6 +704,12 @@ SESSION_SEARCH_SCHEMA = {
                 "description": "Max sessions to summarize (default: 3, max: 5).",
                 "default": 3,
             },
+            "scope": {
+                "type": "string",
+                "enum": ["current_chat", "current_account", "current_profile", "global"],
+                "description": "Recall scope. Default current_chat (this platform/profile/account/chat/thread only). Use current_account/current_profile/global only when the user explicitly asks to look across chats, sibling bots, or all platforms. Cross-scope results include provenance.",
+                "default": "current_chat",
+            },
         },
         "required": [],
     },
@@ -585,7 +728,15 @@ registry.register(
         role_filter=args.get("role_filter"),
         limit=args.get("limit", 3),
         db=kw.get("db"),
-        current_session_id=kw.get("current_session_id")),
+        current_session_id=kw.get("current_session_id"),
+        current_user_id=kw.get("current_user_id"),
+        scope=args.get("scope") or kw.get("scope") or "current_chat",
+        current_source=kw.get("current_source"),
+        current_profile=kw.get("current_profile"),
+        current_account_id=kw.get("current_account_id"),
+        current_chat_id=kw.get("current_chat_id"),
+        current_thread_id=kw.get("current_thread_id"),
+        current_route_profile=kw.get("current_route_profile")),
     check_fn=check_session_search_requirements,
     emoji="🔍",
 )
