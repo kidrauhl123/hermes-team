@@ -4518,3 +4518,51 @@ class TestFeishuMentionEndToEnd(unittest.TestCase):
         # Body: leading @Hermes stripped, Alice preserved, trailing text intact.
         self.assertIn("@Alice review the spec with Alice", event.text)
         self.assertNotIn("@Hermes @Alice", event.text)
+
+
+class TestFeishuMultiAccountDelivery(unittest.IsolatedAsyncioTestCase):
+    def _adapter(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import MultiFeishuAdapter
+
+        return MultiFeishuAdapter(PlatformConfig(
+            enabled=True,
+            extra={
+                "accounts": [
+                    {"account_id": "acct:1", "app_id": "app1", "app_secret": "secret1"},
+                    {"account_id": "acct:2", "app_id": "app2", "app_secret": "secret2"},
+                ]
+            },
+        ))
+
+    async def test_send_routes_by_metadata_account_id(self):
+        from gateway.platforms.base import SendResult
+
+        adapter = self._adapter()
+        child1 = adapter._children["acct:1"]
+        child2 = adapter._children["acct:2"]
+        child1.send = AsyncMock(return_value=SendResult(success=True, message_id="m1"))
+        child2.send = AsyncMock(return_value=SendResult(success=True, message_id="m2"))
+
+        result = await adapter.send("chat2", "progress", metadata={"account_id": "acct:2"})
+
+        self.assertTrue(result.success)
+        child1.send.assert_not_called()
+        child2.send.assert_awaited_once()
+        self.assertEqual(adapter._sent_message_accounts["m2"], "acct:2")
+
+    async def test_edit_routes_to_account_that_created_message(self):
+        from gateway.platforms.base import SendResult
+
+        adapter = self._adapter()
+        child1 = adapter._children["acct:1"]
+        child2 = adapter._children["acct:2"]
+        child1.edit_message = AsyncMock(return_value=SendResult(success=True, message_id="m1"))
+        child2.edit_message = AsyncMock(return_value=SendResult(success=True, message_id="m2"))
+        adapter._sent_message_accounts["m2"] = "acct:2"
+
+        result = await adapter.edit_message("chat2", "m2", "updated")
+
+        self.assertTrue(result.success)
+        child1.edit_message.assert_not_called()
+        child2.edit_message.assert_awaited_once_with("chat2", "m2", "updated", finalize=False)

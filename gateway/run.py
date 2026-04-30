@@ -10172,7 +10172,20 @@ class GatewayRunner:
             _progress_thread_id = source.thread_id or event_message_id
         else:
             _progress_thread_id = source.thread_id
-        _progress_metadata = {"thread_id": _progress_thread_id} if _progress_thread_id else None
+        _progress_metadata = None
+        try:
+            _progress_adapter = self.adapters.get(source.platform)
+            if _progress_adapter and hasattr(_progress_adapter, "_metadata_for_source"):
+                _progress_metadata = _progress_adapter._metadata_for_source(source)
+        except Exception:
+            _progress_metadata = None
+        if _progress_metadata is None:
+            _progress_metadata = {}
+        else:
+            _progress_metadata = dict(_progress_metadata)
+        if _progress_thread_id:
+            _progress_metadata["thread_id"] = _progress_thread_id
+        _progress_metadata = _progress_metadata or None
 
         async def send_progress_messages():
             if not progress_queue:
@@ -10394,7 +10407,7 @@ class GatewayRunner:
         # Bridge sync status_callback → async adapter.send for context pressure
         _status_adapter = self.adapters.get(source.platform)
         _status_chat_id = source.chat_id
-        _status_thread_metadata = {"thread_id": _progress_thread_id} if _progress_thread_id else None
+        _status_thread_metadata = _progress_metadata
 
         def _status_callback_sync(event_type: str, message: str) -> None:
             if not _status_adapter or not _run_still_current():
@@ -10538,7 +10551,7 @@ class GatewayRunner:
                             adapter=_adapter,
                             chat_id=source.chat_id,
                             config=_consumer_cfg,
-                            metadata={"thread_id": _progress_thread_id} if _progress_thread_id else None,
+                            metadata=_progress_metadata,
                             on_new_message=(
                                 (lambda: progress_queue.put(("__reset__",)))
                                 if progress_queue is not None

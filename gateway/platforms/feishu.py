@@ -1408,6 +1408,7 @@ class MultiFeishuAdapter(BasePlatformAdapter):
         super().__init__(config, Platform.FEISHU)
         self._children: Dict[str, FeishuAdapter] = {}
         self._default_account_id: Optional[str] = None
+        self._sent_message_accounts: Dict[str, str] = {}
         self._build_children(config)
 
     @staticmethod
@@ -1511,16 +1512,28 @@ class MultiFeishuAdapter(BasePlatformAdapter):
         return child
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        return await self._child_for_metadata(metadata).send(chat_id, content, reply_to=reply_to, metadata=metadata)
+        child = self._child_for_metadata(metadata)
+        result = await child.send(chat_id, content, reply_to=reply_to, metadata=metadata)
+        if result.success and result.message_id:
+            self._sent_message_accounts[str(result.message_id)] = child.account_id
+        return result
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         return await self._child_for_metadata(metadata).send_typing(chat_id, metadata=metadata)
 
+    def _child_for_message_id(self, message_id: str) -> FeishuAdapter:
+        account_id = self._sent_message_accounts.get(str(message_id))
+        if account_id:
+            child = self._children.get(account_id)
+            if child is not None:
+                return child
+        return self._child_for_metadata(None)
+
     async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False) -> SendResult:
-        return await self._child_for_metadata(None).edit_message(chat_id, message_id, content, finalize=finalize)
+        return await self._child_for_message_id(message_id).edit_message(chat_id, message_id, content, finalize=finalize)
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:
-        return await self._child_for_metadata(None).delete_message(chat_id, message_id)
+        return await self._child_for_message_id(message_id).delete_message(chat_id, message_id)
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         return await self._child_for_metadata(None).get_chat_info(chat_id)
